@@ -22,6 +22,34 @@
         --salmon:#da6863; /* CTA cafecito */
       }
     </style>
+
+    <!-- Google APIs (Drive + Sheets) -->
+    <script>
+      // 👉 Reemplazá con TUS credenciales (GCP → APIs & Services → Credentials)
+      window.GAPI_CONFIG = {
+        apiKey:    'TU_API_KEY',
+        clientId:  'TU_CLIENT_ID.apps.googleusercontent.com',
+        discoveryDocs: [
+          'https://sheets.googleapis.com/$discovery/rest?version=v4',
+          'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
+        ],
+        scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets'
+      };
+      function initGapiClient(){
+        if (!window.gapi || !window.GAPI_CONFIG) return;
+        gapi.load('client:auth2', async () => {
+          try{
+            await gapi.client.init({
+              apiKey: GAPI_CONFIG.apiKey,
+              clientId: GAPI_CONFIG.clientId,
+              discoveryDocs: GAPI_CONFIG.discoveryDocs,
+              scope: GAPI_CONFIG.scope
+            });
+          }catch(_){}
+        });
+      }
+    </script>
+    <script async defer src="https://apis.google.com/js/api.js" onload="initGapiClient()"></script>
   </head>
   <body class="min-h-dvh text-slate-900" style="background:var(--crema);">
     <div id="root"></div>
