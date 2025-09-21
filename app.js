@@ -451,9 +451,67 @@ function AbsencesModal({ open, student, onClose, onApplyChange }) {
 
 function App() {
   const [state, setState] = useState(loadState());
-  const courses = state.courses;
-  const selectedCourseId = state.selectedCourseId;
-  const selectedDate = state.selectedDate || todayStr();
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Escuchar cambios de sesión
+  useEffect(() => {
+    const unsub = firebase.auth().onAuthStateChanged(async (u) => {
+      if (u) {
+        setUser(u);
+        const doc = await db.collection("users").doc(u.uid).get();
+        if (doc.exists) {
+          setState(doc.data());
+        } else {
+          const local = loadState();
+          await db.collection("users").doc(u.uid).set(local);
+          setState(local);
+        }
+      } else {
+        setUser(null);
+        setState(loadState());
+      }
+      setLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
+  // Guardar cambios
+  useEffect(() => {
+    if (!loading) {
+      if (user) {
+        db.collection("users").doc(user.uid).set(state);
+      } else {
+        saveState(state);
+      }
+    }
+  }, [state, user, loading]);
+
+  // Pantalla de carga
+  if (loading) {
+    return e('div', { className:'h-screen flex items-center justify-center' },
+      e('p', { className:'text-lg text-slate-600' }, 'Cargando...')
+    );
+  }
+
+  // Pantalla de login si no hay usuario
+  if (!user) {
+    return e('div', { className:'h-screen flex items-center justify-center bg-slate-100' },
+      e('div', { className:'p-8 bg-white rounded-2xl shadow-lg text-center space-y-6' },
+        e('h1', { className:'text-2xl font-bold text-slate-800' }, 'Asistencia de Estudiantes'),
+        e('p', { className:'text-slate-600' }, 'Iniciá sesión con Google para continuar'),
+        e('button', {
+          onClick: signInWithGoogle,
+          className:'px-5 py-3 bg-green-500 hover:bg-green-600 text-white rounded-xl font-semibold'
+        }, 'Iniciar sesión con Google')
+      )
+    );
+  }
+
+  // Si hay usuario → mostrar la app normal
+  return e('div', null,
+    e(Header, { selectedDate, onChangeDate:setSelectedDate, user, onLogin:signInWithGoogle, onLogout:signOutGoogle }),
+  );
 
   // Modal de notas
   const [gradesOpen, setGradesOpen] = useState(false);
@@ -741,3 +799,15 @@ function App() {
     e(AbsencesModal, {
       open:absencesOpen,
       student:absencesStudent,
+      onClose:()=>setAbsencesOpen(false),
+      onApplyChange:(histId, reason)=>{
+        if(absencesStudent){
+          applyAbsenceChange(absencesStudent.id, histId, reason);
+        }
+      }
+    })
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(e(App));
