@@ -37,8 +37,24 @@ function loadState() {
 function saveState(state){ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
 
 function sanitizePhone(phoneRaw=''){
-  // keep digits only for wa.me
-  return String(phoneRaw).replace(/\D+/g, '');
+  // Normaliza números de AR para WhatsApp (wa.me):
+  // - Solo dígitos
+  // - Quita '00' internacional o '0' nacional inicial
+  // - Elimina '15' luego del prefijo de área
+  // - Asegura prefijo país '54' y dígito '9' (móviles) -> 549 + área + número
+  let d = String(phoneRaw).replace(/\D+/g, '');
+  if (!d) return '';
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.startsWith('0')) d = d.slice(1);
+  // Si ya viene con 54 y tiene '15' tras el área, eliminarlo
+  d = d.replace(/^54(9?)(\d{2,4})15(\d{7,8})$/, '54$1$2$3');
+  // Si NO tiene 54 y parece local (10-11 dígitos), anteponer 54
+  if (!d.startsWith('54') && d.length >= 10 && d.length <= 11) d = '54' + d;
+  // Si ahora tiene 54 pero no 549, insertar 9 (móviles)
+  if (d.startsWith('54') && d[2] !== '9') d = '54' + '9' + d.slice(2);
+  // Casos con 549 + área + '15' + número (algunos ingresan así): quitar '15'
+  d = d.replace(/^549(\d{2,4})15(\d{7,8})$/, '549$1$2');
+  return d;
 }
 function buildRiskMessage(course, student, attendancePct, promedio){
   const courseName = course?.name || 'curso';
@@ -133,7 +149,7 @@ function StudentsTable({ course, students, onAdd, onEdit, onDelete, onShowAbsenc
             e('th', { className:'p-3 text-sm' }, 'Presente'),
             e('th', { className:'p-3 text-sm' }, 'Ausente'),
             e('th', { className:'p-3 text-sm' }, 'Promedio'),
-            e('th', { className:'p-3 text-sm' }, 'Riesgo'),
+            e('th', { className:'p-3 text-sm' }),
             e('th', { className:'p-3 text-sm' })
           )
         ),
@@ -178,17 +194,16 @@ function StudentsTable({ course, students, onAdd, onEdit, onDelete, onShowAbsenc
                   e('td', { className:'p-3' },
                     isRisk
                       ? e('div', { className:'flex items-center gap-2' },
-                          e('span', { className:'text-[10px] px-2 py-0.5 rounded-full font-semibold',
-                            style:{ background:'#fdecea', color:'#991b1b', border:'1px solid #f5c2c7' } }, 'RIESGO'),
+                          e('span', { className:'text-[11px] font-semibold', style:{ color:'#991b1b' } }, 'Riesgo Pedagógico'),
                           (course?.preceptor?.phone
                             ? e('button', {
                                 className:'text-xs px-2 py-1 rounded',
                                 style:{ background:'#f0eaf5', color:'#6c467e' },
                                 onClick:()=>onNotifyPreceptor(s, attendancePct, promedio)
                               }, 'Avisar')
-                            : e('span', { className:'text-[10px] text-slate-500' }, '—'))
+                            : null)
                         )
-                      : e('span', { className:'text-xs text-slate-500 italic' }, 'OK')
+                      : null
                   ),
                   e('td', { className:'p-3 text-right' },
                     e('div', {className:'flex gap-2 justify-end'},
