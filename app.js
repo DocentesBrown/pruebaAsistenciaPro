@@ -2,7 +2,7 @@
 const { useEffect, useMemo, useState, useRef } = React;
 const e = React.createElement;
 
-const LS_KEY = 'agenda_estudiantes_v3';
+const LS_KEY = 'agenda_estudiantes_v4'; // bump
 function uid(prefix) { prefix = prefix || 'id'; return prefix + '_' + Math.random().toString(36).slice(2,9); }
 function safeStats(stats) { return stats && typeof stats === 'object' ? stats : { present:0, absent:0, later:0 }; }
 function pct(stats) { const s = safeStats(stats); const d = (s.present||0) + (s.absent||0); return d ? Math.round((s.present/d)*100) : 0; }
@@ -22,46 +22,57 @@ function avg(arr){
 function loadState() {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    const base = { courses:{}, selectedCourseId:null, selectedDate: todayStr() };
+    const base = { courses:{}, selectedCourseId:null, selectedDate: todayStr(), googleConnected:false };
     if (!raw) return base;
     const parsed = JSON.parse(raw);
-    return {
-      courses: parsed.courses || {},
-      selectedCourseId: parsed.selectedCourseId || null,
-      selectedDate: todayStr()
-    };
+    return Object.assign(base, parsed, { selectedDate: todayStr() });
   } catch {
-    return { courses:{}, selectedCourseId:null, selectedDate: todayStr() };
+    return { courses:{}, selectedCourseId:null, selectedDate: todayStr(), googleConnected:false };
   }
 }
 function saveState(state){ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
 
-// ===== Google APIs auth via GIS (evita error 400 redirect_uri_mismatch) =====
-async function ensureGapiAuthed(){
+// ===== Google APIs auth via GIS (token) =====
+function hasGoogleToken(){
   try{
-    if(!(window._gapiReady && window._gisReady && window.gapi && window.tokenClient)) return null;
-    const token = gapi.client.getToken && gapi.client.getToken();
-    if (token && token.access_token) return gapi;
-    return await new Promise((resolve) => {
+    const t = gapi && gapi.client && gapi.client.getToken && gapi.client.getToken();
+    return !!(t && t.access_token);
+  }catch(_) { return false; }
+}
+async function connectGoogleInteractive(){
+  if(!(window._gapiReady && window._gisReady && window.gapi && window.tokenClient)){
+    throw new Error('Google API no listo. Recargá la página luego de 2-3 segundos.');
+  }
+  return await new Promise((resolve, reject) => {
+    try{
       window.tokenClient.callback = (resp) => {
-        if (resp && resp.access_token) {
+        if(resp && resp.access_token){
           gapi.client.setToken({ access_token: resp.access_token });
-          resolve(gapi);
-        } else {
-          resolve(null);
+          resolve(true);
+        }else if(resp && resp.error){
+          reject(new Error(resp.error));
+        }else{
+          reject(new Error('No se pudo obtener el token.'));
         }
       };
-      // Si no hubo consentimiento previo, forzamos el prompt
-      window.tokenClient.requestAccessToken({ prompt: 'consent' });
-    });
-  }catch(_){ return null; }
+      window.tokenClient.requestAccessToken({ prompt: hasGoogleToken() ? '' : 'consent' });
+    }catch(err){
+      reject(err);
+    }
+  });
+}
+async function ensureGapiAuthed(){
+  if(hasGoogleToken()) return true;
+  try { return await connectGoogleInteractive(); }
+  catch(err){ console.error('Auth error', err); return false; }
 }
 
 async function createSheetForCourse(name){
-  const g = await ensureGapiAuthed();
-  if(!g || !g.client || !g.client.sheets) return null;
+  const ok = await ensureGapiAuthed();
+  if(!ok) throw new Error('Sin autorización de Google.');
+  if(!gapi || !gapi.client || !gapi.client.sheets) throw new Error('Sheets API no disponible.');
 
-  const res = await g.client.sheets.spreadsheets.create({
+  const res = await gapi.client.sheets.spreadsheets.create({
     properties: { title: `Asistencia – ${name}` },
     sheets: [
       { properties: { title: 'Resumen' } },
@@ -72,27 +83,28 @@ async function createSheetForCourse(name){
   });
   const id = res.result.spreadsheetId;
 
-  await g.client.sheets.spreadsheets.values.update({
+  // Encabezados
+  await gapi.client.sheets.spreadsheets.values.update({
     spreadsheetId: id, range: 'Resumen!A1:D1', valueInputOption: 'RAW',
     resource: { values: [['Estudiante','Presente','Ausente','% Asistencia']] }
   });
-  await g.client.sheets.spreadsheets.values.update({
+  await gapi.client.sheets.spreadsheets.values.update({
     spreadsheetId: id, range: 'Historial!A1:C1', valueInputOption: 'RAW',
     resource: { values: [['Estudiante','Fecha','Estado']] }
   });
-  await g.client.sheets.spreadsheets.values.update({
+  await gapi.client.sheets.spreadsheets.values.update({
     spreadsheetId: id, range: 'Calificaciones!A1:D1', valueInputOption: 'RAW',
     resource: { values: [['Estudiante','Fecha','Tipo','Nota']] }
   });
-  await g.client.sheets.spreadsheets.values.update({
+  await gapi.client.sheets.spreadsheets.values.update({
     spreadsheetId: id, range: 'Promedios!A1:B1', valueInputOption: 'RAW',
     resource: { values: [['Estudiante','Promedio']] }
   });
   return id;
 }
 
-// ===== UI Components (idénticos a la versión previa salvo orden tabla) =====
-function Header({ selectedDate, onChangeDate }) {
+// ===== UI =====
+function Header({ selectedDate, onChangeDate, googleConnected, onConnectGoogle }) {
   return e('header',
     { className: 'w-full p-4 md:p-6 text-white flex items-center justify-between sticky top-0 z-10 shadow',
       style:{ background:'#24496e' } },
@@ -104,10 +116,19 @@ function Header({ selectedDate, onChangeDate }) {
                className:'text-xs md:text-sm underline', style:{ opacity:.9 } }, 'creado por @docentesbrown')
     ),
     e('div', { className:'flex items-center gap-2' },
-      e('label', { className:'text-sm opacity-90 hidden md:block' }, 'Fecha:'),
-      e('input', { type:'date', value:selectedDate,
+      e('input', {
+        type:'date',
+        value:selectedDate,
         onChange:(ev)=>onChangeDate(ev.target.value),
-        className:'rounded-md px-2 py-1 text-sm', style:{ color:'#24496e' } })
+        className:'rounded-md px-2 py-1 text-sm',
+        style:{ color:'#24496e' }
+      }),
+      e('button', {
+        onClick:onConnectGoogle,
+        className:'px-3 py-1.5 rounded-md text-sm font-semibold',
+        style:{ background: googleConnected ? '#16a34a' : '#6c467e', color:'#fff' },
+        title: googleConnected ? 'Conectado a Google' : 'Conectar a Google'
+      }, googleConnected ? '✓ Google conectado' : 'Conectar Google')
     )
   );
 }
@@ -341,38 +362,51 @@ function Modal({ open, title, onClose, children }) {
   );
 }
 
-// Modal de calificaciones (sin descripción)
+// Modal de calificaciones (sin descripción) - AHORA se re-renderiza automáticamente
 function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
   const [tipo, setTipo] = useState('escrito');
   const [date, setDate] = useState(todayStr());
   const [value, setValue] = useState('');
   useEffect(() => { if (open) { setTipo('escrito'); setDate(todayStr()); setValue(''); } }, [open]);
   if(!open || !student) return null;
+
   const grades = (student.grades||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   const promedio = avg(grades);
+
   return e(Modal, { open, title:`Calificaciones – ${student.name}`, onClose },
     e('div', { className:'space-y-4' },
       e('div', { className:'grid grid-cols-1 sm:grid-cols-3 gap-2' },
-        e('input', { type:'date', className:'px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'}, value:date, onChange:(ev)=>setDate(ev.target.value)}),
+        e('input', { type:'date', className:'px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'},
+          value:date, onChange:(ev)=>setDate(ev.target.value)}),
         e('select', { value:tipo, onChange:(ev)=>setTipo(ev.target.value), className:'px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'} },
           e('option', {value:'escrito'}, 'Escrito'),
           e('option', {value:'oral'}, 'Oral'),
           e('option', {value:'practico'}, 'Práctico'),
           e('option', {value:'conceptual'}, 'Conceptual')
         ),
-        e('input', { type:'number', step:'0.01', className:'px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'}, placeholder:'Nota', value:value, onChange:(ev)=>setValue(ev.target.value)}),
+        e('input', { type:'number', step:'0.01', className:'px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'},
+          placeholder:'Nota', value:value, onChange:(ev)=>setValue(ev.target.value)}),
       ),
       e('div', null,
         e('button', { onClick:()=>{
-            const v = Number(value); if(Number.isNaN(v)) { alert('Ingresá una nota numérica.'); return; }
-            onAdd({ id: uid('nota'), tipo, date: date || todayStr(), value: v }); setValue('');
-          }, className:'px-4 py-2 rounded-xl text-white', style:{background:'#6c467e'} }, '+ Agregar nota')
+            const v = Number(value);
+            if(Number.isNaN(v)) { alert('Ingresá una nota numérica.'); return; }
+            onAdd({ id: uid('nota'), tipo, date: date || todayStr(), value: v });
+            setValue('');
+          },
+          className:'px-4 py-2 rounded-xl text-white', style:{background:'#6c467e'}
+        }, '+ Agregar nota')
       ),
       e('div', { className:'text-sm text-slate-700' }, `Promedio: `, e('strong', {style:{color:'#24496e'}}, promedio.toFixed(2))),
       e('div', { className:'max-h-64 overflow-auto border rounded-xl', style:{borderColor:'#d7dbe0'} },
         e('table', { className:'w-full text-left' },
           e('thead', { style:{background:'#24496e', color:'#fff'} },
-            e('tr', null, e('th', {className:'p-2 text-sm'}, 'Fecha'), e('th', {className:'p-2 text-sm'}, 'Tipo'), e('th', {className:'p-2 text-sm'}, 'Nota'), e('th', {className:'p-2 text-sm'}))
+            e('tr', null,
+              e('th', {className:'p-2 text-sm'}, 'Fecha'),
+              e('th', {className:'p-2 text-sm'}, 'Tipo'),
+              e('th', {className:'p-2 text-sm'}, 'Nota'),
+              e('th', {className:'p-2 text-sm'})
+            )
           ),
           e('tbody', null,
             ...(grades.length ? grades.map(g =>
@@ -391,7 +425,9 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
                       onEdit({ ...g, date:newDate, tipo:newTipo, value:nv });
                     }
                   }, 'Editar'),
-                  e('button', { className:'text-xs px-2 py-1 rounded', style:{background:'#fde2e0', color:'#da6863'}, onClick:()=>onDelete(g.id) }, 'Eliminar')
+                  e('button', { className:'text-xs px-2 py-1 rounded', style:{background:'#fde2e0', color:'#da6863'},
+                    onClick:()=>onDelete(g.id)
+                  }, 'Eliminar')
                 )
               )
             ) : [e('tr', {key:'empty'}, e('td', {colSpan:4, className:'p-2 text-center text-slate-500'}, 'Sin notas todavía.'))])
@@ -404,12 +440,11 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
 
 function App() {
   const [state, setState] = useState(loadState());
-  const courses = state.courses;
-  const selectedCourseId = state.selectedCourseId;
-  const selectedDate = state.selectedDate || todayStr();
+  const { courses, selectedCourseId, selectedDate, googleConnected } = state;
 
+  // Para el modal: guardamos SOLO el id; el alumno se mira SIEMPRE desde state.
   const [gradesOpen, setGradesOpen] = useState(false);
-  const [gradesStudent, setGradesStudent] = useState(null);
+  const [gradesStudentId, setGradesStudentId] = useState(null);
 
   useEffect(() => { saveState(state); }, [state]);
 
@@ -417,6 +452,19 @@ function App() {
 
   function setSelectedDate(dateStr){ setState(s => Object.assign({}, s, { selectedDate: dateStr || todayStr() })); }
   function selectCourse(id){ setState(s => Object.assign({}, s, { selectedCourseId:id })); }
+
+  async function connectGoogle(){
+    try{
+      const ok = await connectGoogleInteractive();
+      setState(s => Object.assign({}, s, { googleConnected: !!ok }));
+      if(!ok) alert('No se pudo conectar con Google.');
+    }catch(err){
+      const msg = String(err && err.message ? err.message : err);
+      alert('Error de Google OAuth: ' + msg + '\n\nPosibles causas:\n- clientId/API key inválidos\n- Origen no autorizado en GCP (Authorized JavaScript origins)\n- La app está servida como file:// (usá http:// o https://)');
+      setState(s => Object.assign({}, s, { googleConnected:false }));
+    }
+  }
+
   async function createCourse(){
     const name = prompt('Nombre del curso (ej. 3°B - Matemática)');
     if (!name || !name.trim()) return;
@@ -428,6 +476,7 @@ function App() {
       next.courses[id] = { id, name:name.trim(), students:{}, sheetId:null };
       return next;
     });
+    // Intento crear Sheet
     try{
       const sheetId = await createSheetForCourse(name.trim());
       if(sheetId){
@@ -441,7 +490,10 @@ function App() {
         });
         alert('Se creó la planilla en tu Drive y quedó vinculada al curso.');
       }
-    }catch(_){}
+    }catch(err){
+      console.error(err);
+      alert('No se pudo crear la planilla.\nPodés usar el botón "Conectar Google" (arriba derecha) y volver a intentar.\nMensaje: ' + (err && err.message ? err.message : err));
+    }
   }
   function renameCourse(id, newName){
     setState(s=>{
@@ -541,7 +593,8 @@ function App() {
       return next;
     });
   }
-  function openGrades(student){ setGradesStudent(student); setGradesOpen(true); }
+
+  function openGrades(student){ setGradesStudentId(student.id); setGradesOpen(true); }
   function addGrade(studentId, grade){
     setState(s=>{
       const next = Object.assign({}, s);
@@ -586,6 +639,9 @@ function App() {
     return Object.values(selectedCourse.students).sort((a,b)=>a.name.localeCompare(b.name));
   }, [selectedCourse]);
 
+  // Para el modal: obtenemos SIEMPRE el alumno fresco desde state
+  const gradesStudent = selectedCourse && gradesStudentId ? selectedCourse.students[gradesStudentId] || null : null;
+
   function exportStateJSON(){
     try{
       const data = JSON.stringify(state, null, 2);
@@ -599,7 +655,7 @@ function App() {
   function importStateFromText(text){
     try{
       const parsed = JSON.parse(text);
-      const next = { courses: parsed && typeof parsed.courses==='object' ? parsed.courses : {}, selectedCourseId: parsed && parsed.selectedCourseId ? parsed.selectedCourseId : null, selectedDate: todayStr() };
+      const next = { courses: parsed && typeof parsed.courses==='object' ? parsed.courses : {}, selectedCourseId: parsed && parsed.selectedCourseId ? parsed.selectedCourseId : null, selectedDate: todayStr(), googleConnected:false };
       setState(next); alert('Importación exitosa.');
     } catch(err){ alert('Archivo inválido.'); }
   }
@@ -620,7 +676,7 @@ function App() {
   }
 
   return e('div', null,
-    e(Header, { selectedDate, onChangeDate:setSelectedDate }),
+    e(Header, { selectedDate, onChangeDate:setSelectedDate, googleConnected, onConnectGoogle:connectGoogle }),
     e('main', { className:'max-w-5xl mx-auto' },
       Object.keys(courses).length === 0
         ? e(EmptyState, { onCreateCourse:createCourse })
@@ -645,10 +701,14 @@ function App() {
         : null
     ),
     e(BottomActions, { onExportJSON:exportStateJSON, onImportJSON:importStateFromText, onExportXLSX:exportXLSX }),
-    e(GradesModal, { open:gradesOpen, student:gradesStudent, onClose:()=>setGradesOpen(false),
+    e(GradesModal, {
+      open:gradesOpen,
+      student:gradesStudent,
+      onClose:()=>setGradesOpen(false),
       onAdd:(g)=>{ if(gradesStudent) addGrade(gradesStudent.id, g); },
       onEdit:(g)=>{ if(gradesStudent) editGrade(gradesStudent.id, g); },
-      onDelete:(id)=>{ if(gradesStudent) deleteGrade(gradesStudent.id, id); } })
+      onDelete:(id)=>{ if(gradesStudent) deleteGrade(gradesStudent.id, id); }
+    })
   );
 }
 
