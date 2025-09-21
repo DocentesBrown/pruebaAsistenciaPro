@@ -127,6 +127,7 @@ function CoursesBar({ courses, selectedCourseId, onSelect, onCreate, onRename, o
 }
 
 function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOpenGrades }) {
+  const [cond, setCond] = useState('cursa');
   const [name, setName] = useState('');
   const sorted = useMemo(() => Object.values(students).sort((a,b)=>a.name.localeCompare(b.name)), [students]);
 
@@ -140,8 +141,14 @@ function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOp
           style:{ borderColor:'#d7dbe0' }
         })
       ),
+      e('div', { className:'flex items-center gap-2' },
+        e('select', { value:cond, onChange:(ev)=>setCond(ev.target.value), className:'px-3 py-2 border rounded-xl', style:{ borderColor:'#d7dbe0' } },
+          e('option', {value:'cursa'}, 'Cursa'),
+          e('option', {value:'recursa'}, 'Recursa')
+        )
+      ),
       e('button', {
-        onClick:()=>{ if(!name.trim()) return; onAdd(name.trim()); setName(''); },
+        onClick:()=>{ if(!name.trim()) return; onAdd(name.trim(), cond); setName(''); },
         className:'px-4 py-2 rounded-xl text-white',
         style:{ background:'#6c467e' }
       }, '+ Agregar')
@@ -170,6 +177,7 @@ function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOp
                   e('td', { className:'p-3' },
                     e('div', { className:'flex items-center gap-2' },
                       e('span', { className:'font-medium' }, s.name),
+                      (s.condition ? e('span', { className:'text-[10px] px-2 py-0.5 rounded-full', style:{ background: s.condition==='recursa' ? '#fde2e0' : '#e8f7ef', color: s.condition==='recursa' ? '#da6863' : '#166534' } }, s.condition==='recursa' ? 'Recursa' : 'Cursa') : null),
                       e('button', {
                         onClick:()=>{ const nuevo = prompt('Editar nombre', s.name); if(nuevo && nuevo.trim()) onEdit(s.id, nuevo.trim()); },
                         className:'text-xs px-2 py-1 rounded',
@@ -196,7 +204,7 @@ function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOp
                         onClick:()=>onOpenGrades(s),
                         className:'text-xs px-3 py-1 rounded',
                         style:{ background:'#f0eaf5', color:'#6c467e' } }, 'Notas'),
-                      e('button', { onClick:()=>onDelete(s.id),
+                      e('button', { onClick:()=>{ if(confirm('¿Eliminar estudiante y sus datos?')) onDelete(s.id); },
                         className:'text-xs px-3 py-1 rounded',
                         style:{ background:'#fde2e0', color:'#da6863' } }, 'Eliminar')
                     )
@@ -362,12 +370,14 @@ function Modal({ open, title, onClose, children }) {
 // Modal de calificaciones por estudiante
 function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
   const [label, setLabel] = useState('');
+  const [tipo, setTipo] = useState('escrito');
   const [date, setDate] = useState(todayStr());
   const [value, setValue] = useState('');
 
   useEffect(() => {
     if (open) {
       setLabel('');
+      setTipo('escrito');
       setDate(todayStr());
       setValue('');
     }
@@ -384,6 +394,12 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
           placeholder:'Evaluación (ej. Parcial 1)', value:label, onChange:(ev)=>setLabel(ev.target.value) }),
         e('input', { type:'date', className:'px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'},
           value:date, onChange:(ev)=>setDate(ev.target.value)}),
+        e('select', { value:tipo, onChange:(ev)=>setTipo(ev.target.value), className:'px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'} },
+          e('option', {value:'escrito'}, 'Escrito'),
+          e('option', {value:'oral'}, 'Oral'),
+          e('option', {value:'practico'}, 'Práctico'),
+          e('option', {value:'conceptual'}, 'Conceptual')
+        ),
         e('input', { type:'number', step:'0.01', className:'px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'},
           placeholder:'Nota', value:value, onChange:(ev)=>setValue(ev.target.value)}),
       ),
@@ -391,7 +407,7 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
         e('button', { onClick:()=>{
             const v = Number(value);
             if(!label.trim() || Number.isNaN(v)) { alert('Completá evaluación y un número válido.'); return; }
-            onAdd({ id: uid('nota'), label: label.trim(), date: date || todayStr(), value: v });
+            onAdd({ id: uid('nota'), label: label.trim(), tipo, date: date || todayStr(), value: v });
             setLabel(''); setValue('');
           },
           className:'px-4 py-2 rounded-xl text-white', style:{background:'#6c467e'}
@@ -404,6 +420,7 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
             e('tr', null,
               e('th', {className:'p-2 text-sm'}, 'Fecha'),
               e('th', {className:'p-2 text-sm'}, 'Evaluación'),
+              e('th', {className:'p-2 text-sm'}, 'Tipo'),
               e('th', {className:'p-2 text-sm'}, 'Nota'),
               e('th', {className:'p-2 text-sm'})
             )
@@ -413,6 +430,7 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
               e('tr', {key:g.id, className:'border-t', style:{borderColor:'#e2e8f0'}},
                 e('td', {className:'p-2'}, g.date || ''),
                 e('td', {className:'p-2'}, g.label || ''),
+                e('td', {className:'p-2'}, (g.tipo ? (g.tipo.charAt(0).toUpperCase()+g.tipo.slice(1)) : '')),
                 e('td', {className:'p-2'}, String(g.value)),
                 e('td', {className:'p-2 text-right'},
                   e('button', { className:'text-xs px-2 py-1 rounded mr-2', style:{background:'#f3efdc', color:'#24496e'},
@@ -489,13 +507,13 @@ function App() {
       return next;
     });
   }
-  function addStudent(name){
+  function addStudent(name, condition){
     const id = uid('alumno');
     setState(s=>{
       const next = Object.assign({}, s);
       const course = Object.assign({}, next.courses[selectedCourseId]);
       const students = Object.assign({}, course.students);
-      students[id] = { id, name, stats:{present:0, absent:0, later:0}, history:[], grades:[] };
+      students[id] = { id, name, condition: (condition || 'cursa'), stats:{present:0, absent:0, later:0}, history:[], grades:[] };
       course.students = students;
       next.courses = Object.assign({}, next.courses);
       next.courses[selectedCourseId] = course;
@@ -515,6 +533,7 @@ function App() {
     });
   }
   function deleteStudent(id){
+    if(!confirm('¿Seguro que querés eliminar a este estudiante y toda su información?')) return;
     setState(s=>{
       const next = Object.assign({}, s);
       const course = Object.assign({}, next.courses[selectedCourseId]);
