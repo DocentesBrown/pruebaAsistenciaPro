@@ -2,7 +2,7 @@
 const { useEffect, useMemo, useState, useRef } = React;
 const e = React.createElement;
 
-const LS_KEY = 'agenda_estudiantes_sin_google_v4';
+const LS_KEY = 'agenda_estudiantes_sin_google_v5';
 function uid(prefix) { prefix = prefix || 'id'; return prefix + '_' + Math.random().toString(36).slice(2,9); }
 function safeStats(stats) { return stats && typeof stats === 'object' ? stats : { present:0, absent:0, later:0 }; }
 function pct(stats) { const s = safeStats(stats); const d = (s.present||0) + (s.absent||0); return d ? Math.round((s.present/d)*100) : 0; }
@@ -35,6 +35,17 @@ function loadState() {
   }
 }
 function saveState(state){ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+
+function sanitizePhone(phoneRaw=''){
+  // keep digits only for wa.me
+  return String(phoneRaw).replace(/\D+/g, '');
+}
+function buildRiskMessage(course, student, attendancePct, promedio){
+  const courseName = course?.name || 'curso';
+  const pName = student?.name || '';
+  const msg = `Hola, soy la profe. Aviso de RIESGO para ${pName} (${courseName}). Asistencia: ${attendancePct}%. Promedio: ${promedio}.`;
+  return encodeURIComponent(msg);
+}
 
 // ===== UI =====
 
@@ -93,7 +104,7 @@ function CoursesBar({ courses, selectedCourseId, onSelect, onCreate, onRename, o
   );
 }
 
-function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOpenGrades }) {
+function StudentsTable({ course, students, onAdd, onEdit, onDelete, onShowAbsences, onOpenGrades, onNotifyPreceptor }) {
   const [cond, setCond] = useState('cursa');
   const [name, setName] = useState('');
   const sorted = useMemo(() => Object.values(students).sort((a,b)=>a.name.localeCompare(b.name)), [students]);
@@ -122,6 +133,7 @@ function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOp
             e('th', { className:'p-3 text-sm' }, 'Presente'),
             e('th', { className:'p-3 text-sm' }, 'Ausente'),
             e('th', { className:'p-3 text-sm' }, 'Promedio'),
+            e('th', { className:'p-3 text-sm' }, 'Riesgo'),
             e('th', { className:'p-3 text-sm' })
           )
         ),
@@ -131,6 +143,9 @@ function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOp
                 const st = safeStats(s.stats);
                 const rowBg = idx % 2 === 0 ? '#ffffff' : '#f3efdc';
                 const promedio = avg(s.grades||[]);
+                const attendancePct = pct(st);
+                const isLowAttendance = attendancePct < 15;
+                const isRisk = attendancePct < 85 && promedio < 7;
                 return e('tr', { key:s.id, style:{ background:rowBg, borderTop:'1px solid #cbd5e1' } },
                   e('td', { className:'p-3' },
                     e('div', { className:'flex items-center gap-2' },
@@ -147,7 +162,10 @@ function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOp
                         className:'text-xs px-2 py-1 rounded', style:{ background:'#f3efdc', color:'#24496e' } }, 'Editar')
                     )
                   ),
-                  e('td', { className:'p-3 font-semibold', style:{ color:'#24496e' } }, pct(st) + '%'),
+                  e('td', { className:'p-3 font-semibold',
+                    style: isLowAttendance
+                      ? { background:'#fdecea', color:'#991b1b', borderRadius:'8px' }
+                      : { color:'#24496e' } }, attendancePct + '%'),
                   e('td', { className:'p-3' }, st.present || 0),
                   e('td', { className:'p-3' },
                     e('div', { className:'flex items-center gap-2' },
@@ -157,6 +175,21 @@ function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOp
                     )
                   ),
                   e('td', { className:'p-3 font-semibold', style:{ color:'#24496e' } }, promedio.toFixed(2)),
+                  e('td', { className:'p-3' },
+                    isRisk
+                      ? e('div', { className:'flex items-center gap-2' },
+                          e('span', { className:'text-[10px] px-2 py-0.5 rounded-full font-semibold',
+                            style:{ background:'#fdecea', color:'#991b1b', border:'1px solid #f5c2c7' } }, 'RIESGO'),
+                          (course?.preceptor?.phone
+                            ? e('button', {
+                                className:'text-xs px-2 py-1 rounded',
+                                style:{ background:'#f0eaf5', color:'#6c467e' },
+                                onClick:()=>onNotifyPreceptor(s, attendancePct, promedio)
+                              }, 'Avisar')
+                            : e('span', { className:'text-[10px] text-slate-500' }, '—'))
+                        )
+                      : e('span', { className:'text-xs text-slate-500 italic' }, 'OK')
+                  ),
                   e('td', { className:'p-3 text-right' },
                     e('div', {className:'flex gap-2 justify-end'},
                       e('button', { onClick:()=>onOpenGrades(s), className:'text-xs px-3 py-1 rounded',
@@ -167,7 +200,7 @@ function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOp
                   )
                 );
               })
-            : [e('tr', { key:'empty' }, e('td', { colSpan:6, className:'p-4 text-center text-slate-500' }, 'Sin estudiantes.'))]
+            : [e('tr', { key:'empty' }, e('td', { colSpan:7, className:'p-4 text-center text-slate-500' }, 'Sin estudiantes.'))]
           )
         )
       )
@@ -248,26 +281,6 @@ function RollCallCard({ students, onMark, onUndo, selectedDate }) {
             e('div', { className:'text-xl font-semibold mb-2', style:{ color:'#24496e' } }, '¡Lista completada!'),
             e('div', { className:'text-slate-700' }, 'Ya asignaste estado a todos.')
           )
-    )
-  );
-}
-
-// Acciones inferiores
-function BottomActions({ onExportJSON, onImportJSON, onExportXLSX }) {
-  const fileRef = useRef(null);
-  function handleFile(ev){
-    const file = ev.target.files && ev.target.files[0];
-    if(!file) return;
-    const reader = new FileReader();
-    reader.onload = () => { try { onImportJSON(reader.result); } finally { ev.target.value=''; } };
-    reader.readAsText(file);
-  }
-  return e('div', { className:'p-4 md:p-6 sticky bottom-0 bg-white border-t shadow-sm', style:{ borderColor:'#d7dbe0' } },
-    e('div', { className:'max-w-3xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-3' },
-      e('button', { onClick:onExportXLSX, className:'px-4 py-2 rounded-xl text-white font-semibold', style:{ background:'#24496e' } }, 'Exportar .xlsx'),
-      e('button', { onClick:onExportJSON, className:'px-4 py-2 rounded-xl font-semibold', style:{ background:'#f3efdc', color:'#24496e' } }, 'Exportar JSON'),
-      e('button', { onClick:()=> (fileRef.current && fileRef.current.click()), className:'px-4 py-2 rounded-xl font-semibold', style:{ background:'#f3efdc', color:'#24496e' } }, 'Importar JSON'),
-      e('input', { ref:fileRef, type:'file', accept:'.json,application/json', className:'hidden', onChange:handleFile })
     )
   );
 }
@@ -363,7 +376,7 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
   );
 }
 
-// Modal de inasistencias: incluye ausentes y tarde; select de motivo + aplicar
+// Modal de inasistencias
 function AbsencesModal({ open, student, onClose, onApplyChange }) {
   const [choices, setChoices] = useState({}); // histId -> reason
   useEffect(()=>{ setChoices({}); }, [open, student && student.id]);
@@ -437,6 +450,89 @@ function AbsencesModal({ open, student, onClose, onApplyChange }) {
   );
 }
 
+// Modal de Exportar/Importar
+function ExportModal({ open, onClose, onExportJSON, onImportJSON, onExportXLSX }){
+  const fileRef = useRef(null);
+  function handleFile(ev){
+    const file = ev.target.files && ev.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { try { onImportJSON(reader.result); } finally { ev.target.value=''; } };
+    reader.readAsText(file);
+  }
+  if(!open) return null;
+  return e(Modal, { open, title:'Exportar / Importar', onClose },
+    e('div', { className:'grid grid-cols-1 gap-3' },
+      e('button', { onClick:onExportXLSX, className:'px-4 py-2 rounded-xl text-white font-semibold', style:{ background:'#24496e' } }, 'Exportar .xlsx'),
+      e('button', { onClick:onExportJSON, className:'px-4 py-2 rounded-xl font-semibold', style:{ background:'#f3efdc', color:'#24496e' } }, 'Exportar a PC (.json)'),
+      e('button', { onClick:()=> (fileRef.current && fileRef.current.click()), className:'px-4 py-2 rounded-xl font-semibold', style:{ background:'#f3efdc', color:'#24496e' } }, 'Importar desde PC (.json)'),
+      e('input', { ref:fileRef, type:'file', accept:'.json,application/json', className:'hidden', onChange:handleFile })
+    )
+  );
+}
+
+// Modal de nuevo curso
+function NewCourseModal({ open, onClose, onCreate }){
+  const [name, setName] = useState('');
+  const [days, setDays] = useState({ lun:false, mar:false, mie:false, jue:false, vie:false, sab:false });
+  const [preceptorName, setPreceptorName] = useState('');
+  const [preceptorPhone, setPreceptorPhone] = useState('');
+  function toggleDay(k){ setDays(d => Object.assign({}, d, { [k]: !d[k] })); }
+  function submit(){
+    if(!name.trim()) { alert('Poné un nombre para el curso.'); return; }
+    const selectedDays = Object.entries(days).filter(([k,v])=>v).map(([k])=>k);
+    onCreate({
+      name: name.trim(),
+      days: selectedDays,
+      preceptor: { name: preceptorName.trim(), phone: sanitizePhone(preceptorPhone) }
+    });
+    setName(''); setDays({ lun:false, mar:false, mie:false, jue:false, vie:false, sab:false });
+    setPreceptorName(''); setPreceptorPhone('');
+    onClose();
+  }
+  if(!open) return null;
+  return e(Modal, { open, title:'Nuevo curso', onClose },
+    e('div', { className:'space-y-4' },
+      e('div', null,
+        e('label', { className:'block text-sm font-medium mb-1', style:{ color:'#24496e' } }, 'Nombre del curso'),
+        e('input', { value:name, onChange:ev=>setName(ev.target.value), className:'w-full px-3 py-2 border rounded-xl', style:{ borderColor:'#d7dbe0' }, placeholder:'3°B - Matemática' })
+      ),
+      e('div', null,
+        e('div', { className:'block text-sm font-medium mb-1', style:{ color:'#24496e' } }, 'Días del curso'),
+        e('div', { className:'grid grid-cols-3 gap-2' },
+          ...[
+            ['lun','Lunes'], ['mar','Martes'], ['mie','Miércoles'], ['jue','Jueves'], ['vie','Viernes'], ['sab','Sábado']
+          ].map(([k,lab]) =>
+            e('label', { key:k, className:'flex items-center gap-2 text-sm' },
+              e('input', { type:'checkbox', checked:days[k], onChange:()=>toggleDay(k) }),
+              e('span', null, lab)
+            )
+          )
+        )
+      ),
+      e('div', null,
+        e('div', { className:'block text-sm font-medium mb-1', style:{ color:'#24496e' } }, 'Preceptor/a'),
+        e('div', { className:'grid grid-cols-1 sm:grid-cols-2 gap-2' },
+          e('input', { value:preceptorName, onChange:ev=>setPreceptorName(ev.target.value), className:'px-3 py-2 border rounded-xl', style:{ borderColor:'#d7dbe0' }, placeholder:'Nombre' }),
+          e('input', { value:preceptorPhone, onChange:ev=>setPreceptorPhone(ev.target.value), className:'px-3 py-2 border rounded-xl', style:{ borderColor:'#d7dbe0' }, placeholder:'Teléfono (WhatsApp)' })
+        )
+      ),
+      e('div', null,
+        e('button', { onClick:submit, className:'px-4 py-2 rounded-xl text-white font-semibold', style:{ background:'#6c467e' } }, 'Crear curso')
+      )
+    )
+  );
+}
+
+// Acciones inferiores
+function BottomActions({ onOpenExport }) {
+  return e('div', { className:'p-4 md:p-6 sticky bottom-0 bg-white border-t shadow-sm', style:{ borderColor:'#d7dbe0' } },
+    e('div', { className:'max-w-3xl mx-auto' },
+      e('button', { onClick:onOpenExport, className:'w-full px-4 py-3 rounded-2xl text-white font-semibold', style:{ background:'#24496e' } }, 'Exportar / Importar')
+    )
+  );
+}
+
 function App() {
   const [state, setState] = useState(loadState());
   const courses = state.courses;
@@ -451,24 +547,27 @@ function App() {
   const [absencesOpen, setAbsencesOpen] = useState(false);
   const [absencesStudentId, setAbsencesStudentId] = useState(null);
 
+  // Modales nuevos
+  const [exportOpen, setExportOpen] = useState(false);
+  const [newCourseOpen, setNewCourseOpen] = useState(false);
+
   useEffect(() => { saveState(state); }, [state]);
 
   const selectedCourse = selectedCourseId ? courses[selectedCourseId] : null;
 
   function setSelectedDate(dateStr){ setState(s => Object.assign({}, s, { selectedDate: dateStr || todayStr() })); }
   function selectCourse(id){ setState(s => Object.assign({}, s, { selectedCourseId:id })); }
-  function createCourse(){
-    const name = prompt('Nombre del curso (ej. 3°B - Matemática)');
-    if (!name || !name.trim()) return;
+  function createCourseFromModal(payload){
     const id = uid('curso');
     setState(s => {
       const next = Object.assign({}, s);
       next.selectedCourseId = id;
       next.courses = Object.assign({}, s.courses);
-      next.courses[id] = { id, name:name.trim(), students:{} };
+      next.courses[id] = { id, name:payload.name, days:payload.days||[], preceptor:payload.preceptor||{}, students:{} };
       return next;
     });
   }
+  function createCourse(){ setNewCourseOpen(true); }
   function renameCourse(id, newName){
     setState(s=>{
       const next = Object.assign({}, s);
@@ -488,6 +587,7 @@ function App() {
     });
   }
   function addStudent(name, condition){
+    if(!selectedCourseId) return;
     const id = uid('alumno');
     setState(s=>{
       const next = Object.assign({}, s);
@@ -639,7 +739,6 @@ function App() {
         delete entry.reason;
         hist[idx] = entry;
       } else if (reason === 'justificada') {
-        // Debe seguir contando como ausencia y seguir en la lista
         // Mantener status 'absent' y marcar reason='justificada'. No se tocan contadores.
         entry.status = 'absent';
         entry.reason = 'justificada';
@@ -695,6 +794,16 @@ function App() {
     XLSX.writeFile(wb, `asistencia_${(course.name||'curso').replace(/\s+/g,'_')}.xlsx`);
   }
 
+  function notifyPreceptor(student, attendancePct, promedio){
+    const course = selectedCourse;
+    const phone = sanitizePhone(course?.preceptor?.phone || '');
+    if(!phone){ alert('Este curso no tiene teléfono de preceptor configurado.'); return; }
+    const url = `https://wa.me/${phone}?text=${buildRiskMessage(course, student, attendancePct, promedio.toFixed(2))}`;
+    if(confirm(`Se abrirá WhatsApp para avisar al preceptor (${course.preceptor.name||''}). ¿Continuar?`)){
+      window.open(url, '_blank', 'noopener');
+    }
+  }
+
   return e('div', null,
     e(Header, { selectedDate, onChangeDate:setSelectedDate }),
     e('main', { className:'max-w-5xl mx-auto' },
@@ -707,17 +816,31 @@ function App() {
             e(RollCallCard, { students:studentsArr, selectedDate, onMark:markAttendance, onUndo:undoAttendance }),
             // Luego tabla (abajo)
             e(StudentsTable, {
+              course:selectedCourse,
               students:selectedCourse.students||{},
               onAdd:addStudent,
               onEdit:editStudent,
               onDelete:deleteStudent,
               onShowAbsences:(s)=>openAbsences(s),
-              onOpenGrades:(s)=>openGrades(s)
+              onOpenGrades:(s)=>openGrades(s),
+              onNotifyPreceptor:(s, a, p)=>notifyPreceptor(s, a, p)
             })
           )
         : null
     ),
-    e(BottomActions, { onExportJSON:exportStateJSON, onImportJSON:importStateFromText, onExportXLSX:exportXLSX }),
+    e(BottomActions, { onOpenExport:()=>setExportOpen(true) }),
+    e(ExportModal, {
+      open:exportOpen,
+      onClose:()=>setExportOpen(false),
+      onExportJSON:exportStateJSON,
+      onImportJSON:importStateFromText,
+      onExportXLSX:exportXLSX
+    }),
+    e(NewCourseModal, {
+      open:newCourseOpen,
+      onClose:()=>setNewCourseOpen(false),
+      onCreate:createCourseFromModal
+    }),
     e(GradesModal, {
       open:gradesOpen,
       student:gradesStudent,
