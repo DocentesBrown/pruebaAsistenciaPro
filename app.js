@@ -785,7 +785,9 @@ function App() {
       if (reason === 'erronea') {
         if (entry.status === 'absent' && stats.absent > 0) stats.absent -= 1;
         if (entry.status === 'tarde'  && stats.later  > 0) stats.later  -= 1;
-        hist.splice(idx, 1);
+        // ✅ Reetiquetar como presente en lugar de eliminar
+  entry.status = 'present';
+  stats.present = (stats.present || 0) + 1;
       } else if (reason === 'tarde') {
         if (entry.status === 'absent') {
           if (stats.absent > 0) stats.absent -= 1;
