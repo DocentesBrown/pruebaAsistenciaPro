@@ -736,49 +736,7 @@ function App() {
         }
       }
     })
-           // ==== Firebase Auth & Firestore ====
-const auth = firebase.auth();
-const db = firebase.firestore();
-
-// Registrar usuario con email/contraseña
-async function register(email, password) {
-  try {
-    const userCred = await auth.createUserWithEmailAndPassword(email, password);
-    alert("Usuario registrado: " + userCred.user.email);
-  } catch (err) {
-    alert("Error registrando: " + err.message);
-  }
-}
-
-// Iniciar sesión
-async function login(email, password) {
-  try {
-    const userCred = await auth.signInWithEmailAndPassword(email, password);
-    alert("Sesión iniciada: " + userCred.user.email);
-    await loadUserData(userCred.user.uid); // ahora carga tus datos guardados
-  } catch (err) {
-    alert("Error iniciando sesión: " + err.message);
-  }
-}
-
-// Cerrar sesión
-function logout() {
-  return auth.signOut().then(() => alert("Sesión cerrada."));
-}
-
-// Guardar el estado del usuario en Firestore
-async function saveUserData(uid, state) {
-  await db.collection("users").doc(uid).set(state);
-}
-
-// Cargar estado del usuario
-async function loadUserData(uid) {
-  const snap = await db.collection("users").doc(uid).get();
-  if (snap.exists) {
-    setState(snap.data());
-  }
-}
-
+  );
 }
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
