@@ -541,7 +541,10 @@ function NewCourseModal({ open, onClose, onCreate }){
 
 // Acciones inferiores
 function BottomActions({ onOpenExport }) {
-  return e('div', { className:'p-4 md:p-6 sticky bottom-0 bg-white border-t shadow-sm', style:{ borderColor:'#d7dbe0' } },
+  return e('div', { className:'p-6 mt-6 text-center' },
+    e('button', { onClick:onOpenExport, className:'px-4 py-3 rounded-2xl text-white font-semibold', style:{ background:'#24496e' } }, 'Exportar / Importar')
+  );
+} },
     e('div', { className:'max-w-3xl mx-auto' },
       e('button', { onClick:onOpenExport, className:'w-full px-4 py-3 rounded-2xl text-white font-semibold', style:{ background:'#24496e' } }, 'Exportar / Importar')
     )
