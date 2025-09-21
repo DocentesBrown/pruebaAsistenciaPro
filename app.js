@@ -36,6 +36,18 @@ function loadState() {
 }
 function saveState(state){ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
 
+// ===== Autenticación Firebase =====
+function signInWithGoogle() {
+  const provider = new firebase.auth.GoogleAuthProvider();
+  return firebase.auth().signInWithPopup(provider)
+    .catch(err => alert("Error al iniciar sesión: " + err.message));
+}
+
+function signOutGoogle() {
+  return firebase.auth().signOut()
+    .catch(err => alert("Error al cerrar sesión: " + err.message));
+}
+
 // ===== UI =====
 
 function Header({ selectedDate, onChangeDate }) {
