@@ -2,7 +2,7 @@
 const { useEffect, useMemo, useState, useRef } = React;
 const e = React.createElement;
 
-const LS_KEY = 'agenda_estudiantes_sin_google_v1';
+const LS_KEY = 'agenda_estudiantes_sin_google_v4';
 function uid(prefix) { prefix = prefix || 'id'; return prefix + '_' + Math.random().toString(36).slice(2,9); }
 function safeStats(stats) { return stats && typeof stats === 'object' ? stats : { present:0, absent:0, later:0 }; }
 function pct(stats) { const s = safeStats(stats); const d = (s.present||0) + (s.absent||0); return d ? Math.round((s.present/d)*100) : 0; }
@@ -287,7 +287,7 @@ function Modal({ open, title, onClose, children }) {
   );
 }
 
-// Modal de calificaciones (sin descripción) - lee SIEMPRE del estado para refrescar en vivo
+// Modal de calificaciones (sin descripción)
 function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
   const [tipo, setTipo] = useState('escrito');
   const [date, setDate] = useState(todayStr());
@@ -363,15 +363,93 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
   );
 }
 
+// Modal de inasistencias: incluye ausentes y tarde; select de motivo + aplicar
+function AbsencesModal({ open, student, onClose, onApplyChange }) {
+  const [choices, setChoices] = useState({}); // histId -> reason
+  useEffect(()=>{ setChoices({}); }, [open, student && student.id]);
+
+  if(!open || !student) return null;
+  const history = (student.history || []).map(h => h.id ? h : Object.assign({}, h, { id: uid('hist') }));
+  const rows = history
+    .filter(h => h.status === 'absent' || h.status === 'tarde')
+    .slice()
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+
+  // Conteo: solo cuentan los 'absent' (justificada sigue contando)
+  const totalAusentes = rows.filter(r => r.status === 'absent').length;
+
+  function labelFor(r){
+    if(r.status === 'tarde') return 'Tarde';
+    if(r.status === 'absent' && r.reason === 'justificada') return 'Justificada';
+    return 'Ausente';
+    }
+
+  return e(Modal, { open, title:`Inasistencias – ${student.name}`, onClose },
+    e('div', null,
+      e('div', { className:'mb-3 text-sm text-slate-700' },
+        'Total de ausencias: ',
+        e('strong', {style:{color:'#24496e'}}, totalAusentes)
+      ),
+      e('div', { className:'max-h-72 overflow-auto border rounded-xl', style:{borderColor:'#d7dbe0'} },
+        e('table', { className:'w-full text-left' },
+          e('thead', { style:{background:'#24496e', color:'#fff'} },
+            e('tr', null,
+              e('th', {className:'p-2 text-sm'}, 'Fecha'),
+              e('th', {className:'p-2 text-sm'}, 'Estado'),
+              e('th', {className:'p-2 text-sm'}, 'Cambiar a'),
+              e('th', {className:'p-2 text-sm'})
+            )
+          ),
+          e('tbody', null,
+            ...(rows.length ? rows.map((r) =>
+              e('tr', { key:r.id, className:'border-t', style:{borderColor:'#e2e8f0'} },
+                e('td', { className:'p-2' }, r.date || ''),
+                e('td', { className:'p-2' }, labelFor(r)),
+                e('td', { className:'p-2' },
+                  e('select', {
+                    className:'px-2 py-1 border rounded', style:{borderColor:'#d7dbe0'},
+                    value:choices[r.id] || '',
+                    onChange:(ev)=> setChoices(ch => Object.assign({}, ch, { [r.id]: ev.target.value }))
+                  },
+                    e('option', {value:''}, 'Seleccionar...'),
+                    e('option', {value:'tarde'}, 'Tarde'),
+                    e('option', {value:'justificada'}, 'Justificada'),
+                    e('option', {value:'erronea'}, 'Errónea (eliminar)')
+                  )
+                ),
+                e('td', { className:'p-2 text-right' },
+                  e('button', {
+                    className:'text-xs px-2 py-1 rounded',
+                    style:{background:'#fde2e0', color:'#da6863'},
+                    onClick:()=>{
+                      const ch = choices[r.id];
+                      if(!ch){ alert('Elegí una opción en "Cambiar a".'); return; }
+                      onApplyChange(r.id, ch);
+                    }
+                  }, 'Aplicar')
+                )
+              )
+            ) : [e('tr', { key:'empty' }, e('td', { colSpan:4, className:'p-2 text-center text-slate-500' }, 'Sin registros.'))])
+          )
+        )
+      )
+    )
+  );
+}
+
 function App() {
   const [state, setState] = useState(loadState());
   const courses = state.courses;
   const selectedCourseId = state.selectedCourseId;
   const selectedDate = state.selectedDate || todayStr();
 
-  // Modal de notas: guardamos el ID para leer SIEMPRE desde state (así refresca en vivo)
+  // Modal de notas
   const [gradesOpen, setGradesOpen] = useState(false);
   const [gradesStudentId, setGradesStudentId] = useState(null);
+
+  // Modal de inasistencias
+  const [absencesOpen, setAbsencesOpen] = useState(false);
+  const [absencesStudentId, setAbsencesStudentId] = useState(null);
 
   useEffect(() => { saveState(state); }, [state]);
 
@@ -460,7 +538,7 @@ function App() {
       if (action==='absent')  stats.absent  += 1;
       if (action==='later')   stats.later   += 1;
       const history = (st.history || []).slice();
-      history.push({ date: dateStr || todayStr(), status: action });
+      history.push({ id: uid('hist'), date: dateStr || todayStr(), status: action });
       st.stats = stats; st.history = history; students[studentId] = st; course.students = students;
       next.courses = Object.assign({}, next.courses); next.courses[selectedCourseId] = course;
       return next;
@@ -491,6 +569,8 @@ function App() {
   }
 
   function openGrades(student){ setGradesStudentId(student.id); setGradesOpen(true); }
+  function openAbsences(student){ setAbsencesStudentId(student.id); setAbsencesOpen(true); }
+
   function addGrade(studentId, grade){
     setState(s=>{
       const next = Object.assign({}, s);
@@ -530,12 +610,57 @@ function App() {
     });
   }
 
+  // Cambiar/Eliminar inasistencia con motivo (tarde/justificada/erronea)
+  function applyAbsenceChange(studentId, histId, reason){
+    setState(s=>{
+      const next = Object.assign({}, s);
+      const course = Object.assign({}, next.courses[selectedCourseId]);
+      const students = Object.assign({}, course.students);
+      const st = Object.assign({}, students[studentId]);
+      const stats = safeStats(st.stats);
+      const hist = (st.history || []).slice();
+      const idx = hist.findIndex(h => h.id === histId);
+      if (idx === -1) return s; // no changes
+
+      const entry = Object.assign({}, hist[idx]);
+
+      if (reason === 'erronea') {
+        // Si era ausencia, descuenta; si era tarde, descuenta tarde
+        if (entry.status === 'absent' && stats.absent > 0) stats.absent -= 1;
+        if (entry.status === 'tarde'  && stats.later  > 0) stats.later  -= 1;
+        hist.splice(idx, 1);
+      } else if (reason === 'tarde') {
+        // Convertir a TARDE: no cuenta como ausente, sí como "later"
+        if (entry.status === 'absent') {
+          if (stats.absent > 0) stats.absent -= 1;
+          stats.later = (stats.later || 0) + 1;
+        }
+        entry.status = 'tarde';
+        delete entry.reason;
+        hist[idx] = entry;
+      } else if (reason === 'justificada') {
+        // Debe seguir contando como ausencia y seguir en la lista
+        // Mantener status 'absent' y marcar reason='justificada'. No se tocan contadores.
+        entry.status = 'absent';
+        entry.reason = 'justificada';
+        hist[idx] = entry;
+      }
+
+      st.history = hist;
+      st.stats = { present: stats.present||0, absent: stats.absent||0, later: stats.later||0 };
+      students[studentId] = st; course.students = students;
+      next.courses = Object.assign({}, next.courses); next.courses[selectedCourseId] = course;
+      return next;
+    });
+  }
+
   const studentsArr = useMemo(() => {
     if (!selectedCourse) return [];
     return Object.values(selectedCourse.students).sort((a,b)=>a.name.localeCompare(b.name));
   }, [selectedCourse]);
 
   const gradesStudent = selectedCourse && gradesStudentId ? selectedCourse.students[gradesStudentId] || null : null;
+  const absencesStudent = selectedCourse && absencesStudentId ? selectedCourse.students[absencesStudentId] || null : null;
 
   function exportStateJSON(){
     try{
@@ -586,7 +711,7 @@ function App() {
               onAdd:addStudent,
               onEdit:editStudent,
               onDelete:deleteStudent,
-              onShowAbsences:(s)=>alert((s.history||[]).filter(h=>h.status==='absent').map(h=>h.date).join('\\n') || 'Sin ausencias'),
+              onShowAbsences:(s)=>openAbsences(s),
               onOpenGrades:(s)=>openGrades(s)
             })
           )
@@ -600,6 +725,16 @@ function App() {
       onAdd:(g)=>{ if(gradesStudent) addGrade(gradesStudent.id, g); },
       onEdit:(g)=>{ if(gradesStudent) editGrade(gradesStudent.id, g); },
       onDelete:(id)=>{ if(gradesStudent) deleteGrade(gradesStudent.id, id); }
+    }),
+    e(AbsencesModal, {
+      open:absencesOpen,
+      student:absencesStudent,
+      onClose:()=>setAbsencesOpen(false),
+      onApplyChange:(histId, reason)=>{
+        if(absencesStudent){
+          applyAbsenceChange(absencesStudent.id, histId, reason);
+        }
+      }
     })
   );
 }
