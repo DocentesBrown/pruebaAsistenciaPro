@@ -1,9 +1,8 @@
-
 // ===== Helpers =====
 const { useEffect, useMemo, useState, useRef } = React;
 const e = React.createElement;
 
-const LS_KEY = 'agenda_estudiantes_v2'; // bump version to avoid incompatible old state
+const LS_KEY = 'agenda_estudiantes_v3'; // subo versión para evitar estados incompatibles
 function uid(prefix) { prefix = prefix || 'id'; return prefix + '_' + Math.random().toString(36).slice(2,9); }
 function safeStats(stats) { return stats && typeof stats === 'object' ? stats : { present:0, absent:0, later:0 }; }
 function pct(stats) { const s = safeStats(stats); const d = (s.present||0) + (s.absent||0); return d ? Math.round((s.present/d)*100) : 0; }
@@ -21,7 +20,6 @@ function avg(arr){
   return Math.round((s/nums.length)*100)/100;
 }
 function loadState() {
-  // Por defecto SIEMPRE mostrar la fecha de HOY (se puede modificar luego)
   try {
     const raw = localStorage.getItem(LS_KEY);
     const base = { courses:{}, selectedCourseId:null, selectedDate: todayStr() };
@@ -30,14 +28,58 @@ function loadState() {
     return {
       courses: parsed.courses || {},
       selectedCourseId: parsed.selectedCourseId || null,
-      // ignoramos la fecha guardada y arrancamos siempre en "hoy"
-      selectedDate: todayStr()
+      selectedDate: todayStr() // siempre inicia en hoy
     };
   } catch {
     return { courses:{}, selectedCourseId:null, selectedDate: todayStr() };
   }
 }
 function saveState(state){ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+
+// ====== Google APIs helpers (Sheets) ======
+async function ensureGapiAuthed(){
+  try{
+    if(!window.gapi || !gapi.client) return null;
+    // Si no está inicializado aún, dejamos que la app siga sin Sheets
+    const auth = gapi.auth2 && gapi.auth2.getAuthInstance ? gapi.auth2.getAuthInstance() : null;
+    if (auth && !auth.isSignedIn.get()) { await auth.signIn(); }
+    return gapi;
+  }catch(_){ return null; }
+}
+async function createSheetForCourse(name){
+  const g = await ensureGapiAuthed();
+  if(!g || !g.client || !g.client.sheets) return null;
+
+  const res = await g.client.sheets.spreadsheets.create({
+    properties: { title: `Asistencia – ${name}` },
+    sheets: [
+      { properties: { title: 'Resumen' } },
+      { properties: { title: 'Historial' } },
+      { properties: { title: 'Calificaciones' } },
+      { properties: { title: 'Promedios' } }
+    ]
+  });
+  const id = res.result.spreadsheetId;
+
+  // Encabezados básicos
+  await g.client.sheets.spreadsheets.values.update({
+    spreadsheetId: id, range: 'Resumen!A1:D1', valueInputOption: 'RAW',
+    resource: { values: [['Estudiante','Presente','Ausente','% Asistencia']] }
+  });
+  await g.client.sheets.spreadsheets.values.update({
+    spreadsheetId: id, range: 'Historial!A1:C1', valueInputOption: 'RAW',
+    resource: { values: [['Estudiante','Fecha','Estado']] }
+  });
+  await g.client.sheets.spreadsheets.values.update({
+    spreadsheetId: id, range: 'Calificaciones!A1:D1', valueInputOption: 'RAW',
+    resource: { values: [['Estudiante','Fecha','Tipo','Nota']] }
+  });
+  await g.client.sheets.spreadsheets.values.update({
+    spreadsheetId: id, range: 'Promedios!A1:B1', valueInputOption: 'RAW',
+    resource: { values: [['Estudiante','Promedio']] }
+  });
+  return id;
+}
 
 // ===== UI Components =====
 
@@ -155,7 +197,6 @@ function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOp
     ),
     e('div', { className:'overflow-x-auto' },
       e('table', { className:'w-full text-left border rounded-xl overflow-hidden', style:{ borderColor:'#cbd5e1' } },
-        // CABECERA azul + texto blanco
         e('thead', { style:{ background:'#24496e', color:'#ffffff' } },
           e('tr', null,
             e('th', { className:'p-3 text-sm' }, 'Estudiante'),
@@ -166,7 +207,6 @@ function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOp
             e('th', { className:'p-3 text-sm' })
           )
         ),
-        // CUERPO con zebra y acciones
         e('tbody', null,
           ...(sorted.length
             ? sorted.map((s, idx) => {
@@ -179,7 +219,12 @@ function StudentsTable({ students, onAdd, onEdit, onDelete, onShowAbsences, onOp
                       e('span', { className:'font-medium' }, s.name),
                       (s.condition ? e('span', { className:'text-[10px] px-2 py-0.5 rounded-full', style:{ background: s.condition==='recursa' ? '#fde2e0' : '#e8f7ef', color: s.condition==='recursa' ? '#da6863' : '#166534' } }, s.condition==='recursa' ? 'Recursa' : 'Cursa') : null),
                       e('button', {
-                        onClick:()=>{ const nuevo = prompt('Editar nombre', s.name); if(nuevo && nuevo.trim()) onEdit(s.id, nuevo.trim()); },
+                        onClick:()=>{
+                          const nuevo = prompt('Editar nombre', s.name) || s.name;
+                          const cond = prompt('Condición (cursa/recursa)', s.condition || 'cursa') || (s.condition || 'cursa');
+                          const norm = (cond||'').toLowerCase()==='recursa' ? 'recursa' : 'cursa';
+                          onEdit(s.id, { name: nuevo.trim(), condition: norm });
+                        },
                         className:'text-xs px-2 py-1 rounded',
                         style:{ background:'#f3efdc', color:'#24496e' }
                       }, 'Editar')
@@ -286,19 +331,16 @@ function RollCallCard({ students, onMark, onUndo, selectedDate }) {
               )
             ),
             e('div', { className:'grid grid-cols-2 gap-3 md:gap-4' },
-              // Presente (verde suave)
               e('button', {
                 onClick:()=>handleAction('present'),
                 className:'py-3 md:py-4 rounded-2xl font-semibold border',
-                style:{ background:'#e8f7ef', borderColor:'#cdebdc', color:'#166534' } // verde suave
+                style:{ background:'#e8f7ef', borderColor:'#cdebdc', color:'#166534' }
               }, 'Presente ✅'),
-              // Ausente (rojo suave)
               e('button', {
                 onClick:()=>handleAction('absent'),
                 className:'py-3 md:py-4 rounded-2xl font-semibold border',
-                style:{ background:'#fdecea', borderColor:'#f7d7d3', color:'#991b1b' } // rojo suave
+                style:{ background:'#fdecea', borderColor:'#f7d7d3', color:'#991b1b' }
               }, 'Ausente ❌'),
-              // Revisar más tarde (violeta suave)
               e('button', {
                 onClick:()=>handleAction('later'),
                 className:'py-3 md:py-4 rounded-2xl font-semibold border col-span-2',
@@ -319,7 +361,7 @@ function RollCallCard({ students, onMark, onUndo, selectedDate }) {
   );
 }
 
-// Barra inferior con Importar/Exportar (reordenada: XLSX → Export JSON → Import JSON)
+// Barra inferior
 function BottomActions({ onExportJSON, onImportJSON, onExportXLSX }) {
   const fileRef = useRef(null);
   function triggerImport(){ if(fileRef.current) fileRef.current.click(); }
@@ -334,15 +376,12 @@ function BottomActions({ onExportJSON, onImportJSON, onExportXLSX }) {
   return e('div', { className:'p-4 md:p-6 sticky bottom-0 bg-white border-t shadow-sm',
     style:{ borderColor:'#d7dbe0' } },
     e('div', { className:'max-w-3xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-3' },
-      // 1) XLSX
       e('button', { onClick:onExportXLSX,
         className:'px-4 py-2 rounded-xl text-white font-semibold',
         style:{ background:'#24496e' } }, 'Exportar .xlsx'),
-      // 2) Exportar JSON
       e('button', { onClick:onExportJSON,
         className:'px-4 py-2 rounded-xl font-semibold',
         style:{ background:'#f3efdc', color:'#24496e' } }, 'Exportar JSON'),
-      // 3) Importar JSON
       e('button', { onClick:()=> (fileRef.current && fileRef.current.click()),
         className:'px-4 py-2 rounded-xl font-semibold',
         style:{ background:'#f3efdc', color:'#24496e' } }, 'Importar JSON'),
@@ -351,7 +390,7 @@ function BottomActions({ onExportJSON, onImportJSON, onExportXLSX }) {
   );
 }
 
-// Modal simple
+// Modal base
 function Modal({ open, title, onClose, children }) {
   if (!open) return null;
   return e('div', { className:'fixed inset-0 z-50 flex items-end sm:items-center justify-center' },
@@ -367,20 +406,14 @@ function Modal({ open, title, onClose, children }) {
   );
 }
 
-// Modal de calificaciones por estudiante
+// Modal de calificaciones (SIN descripción libre)
 function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
-  const [label, setLabel] = useState('');
   const [tipo, setTipo] = useState('escrito');
   const [date, setDate] = useState(todayStr());
   const [value, setValue] = useState('');
 
   useEffect(() => {
-    if (open) {
-      setLabel('');
-      setTipo('escrito');
-      setDate(todayStr());
-      setValue('');
-    }
+    if (open) { setTipo('escrito'); setDate(todayStr()); setValue(''); }
   }, [open]);
 
   if(!open || !student) return null;
@@ -389,9 +422,7 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
 
   return e(Modal, { open, title:`Calificaciones – ${student.name}`, onClose },
     e('div', { className:'space-y-4' },
-      e('div', { className:'grid grid-cols-1 sm:grid-cols-4 gap-2' },
-        e('input', { className:'px-3 py-2 border rounded-xl sm:col-span-2', style:{borderColor:'#d7dbe0'},
-          placeholder:'Evaluación (ej. Parcial 1)', value:label, onChange:(ev)=>setLabel(ev.target.value) }),
+      e('div', { className:'grid grid-cols-1 sm:grid-cols-3 gap-2' },
         e('input', { type:'date', className:'px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'},
           value:date, onChange:(ev)=>setDate(ev.target.value)}),
         e('select', { value:tipo, onChange:(ev)=>setTipo(ev.target.value), className:'px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'} },
@@ -406,9 +437,9 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
       e('div', null,
         e('button', { onClick:()=>{
             const v = Number(value);
-            if(!label.trim() || Number.isNaN(v)) { alert('Completá evaluación y un número válido.'); return; }
-            onAdd({ id: uid('nota'), label: label.trim(), tipo, date: date || todayStr(), value: v });
-            setLabel(''); setValue('');
+            if(Number.isNaN(v)) { alert('Ingresá una nota numérica.'); return; }
+            onAdd({ id: uid('nota'), tipo, date: date || todayStr(), value: v });
+            setValue('');
           },
           className:'px-4 py-2 rounded-xl text-white', style:{background:'#6c467e'}
         }, '+ Agregar nota')
@@ -419,7 +450,6 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
           e('thead', { style:{background:'#24496e', color:'#fff'} },
             e('tr', null,
               e('th', {className:'p-2 text-sm'}, 'Fecha'),
-              e('th', {className:'p-2 text-sm'}, 'Evaluación'),
               e('th', {className:'p-2 text-sm'}, 'Tipo'),
               e('th', {className:'p-2 text-sm'}, 'Nota'),
               e('th', {className:'p-2 text-sm'})
@@ -429,18 +459,17 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
             ...(grades.length ? grades.map(g =>
               e('tr', {key:g.id, className:'border-t', style:{borderColor:'#e2e8f0'}},
                 e('td', {className:'p-2'}, g.date || ''),
-                e('td', {className:'p-2'}, g.label || ''),
                 e('td', {className:'p-2'}, (g.tipo ? (g.tipo.charAt(0).toUpperCase()+g.tipo.slice(1)) : '')),
                 e('td', {className:'p-2'}, String(g.value)),
                 e('td', {className:'p-2 text-right'},
                   e('button', { className:'text-xs px-2 py-1 rounded mr-2', style:{background:'#f3efdc', color:'#24496e'},
                     onClick:()=>{
-                      const newLabel = prompt('Editar evaluación', g.label || '') ?? g.label;
                       const newDate = prompt('Editar fecha (YYYY-MM-DD)', g.date || todayStr()) ?? g.date;
+                      const newTipo = prompt('Editar tipo (escrito/oral/practico/conceptual)', g.tipo || 'escrito') ?? g.tipo;
                       const newValueRaw = prompt('Editar nota', String(g.value));
                       const nv = Number(newValueRaw);
                       if(Number.isNaN(nv)) return;
-                      onEdit({ ...g, label:newLabel, date:newDate, value:nv });
+                      onEdit({ ...g, date:newDate, tipo:newTipo, value:nv });
                     }
                   }, 'Editar'),
                   e('button', { className:'text-xs px-2 py-1 rounded', style:{background:'#fde2e0', color:'#da6863'},
@@ -462,10 +491,6 @@ function App() {
   const selectedCourseId = state.selectedCourseId;
   const selectedDate = state.selectedDate || todayStr();
 
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalStudent, setModalStudent] = useState(null);
-  const [modalDates, setModalDates] = useState([]);
-
   const [gradesOpen, setGradesOpen] = useState(false);
   const [gradesStudent, setGradesStudent] = useState(null);
 
@@ -477,17 +502,35 @@ function App() {
     setState(s => Object.assign({}, s, { selectedDate: dateStr || todayStr() }));
   }
   function selectCourse(id){ setState(s => Object.assign({}, s, { selectedCourseId:id })); }
-  function createCourse(){
+  async function createCourse(){
     const name = prompt('Nombre del curso (ej. 3°B - Matemática)');
     if (!name || !name.trim()) return;
     const id = uid('curso');
+
+    // 1) Creamos localmente
     setState(s => {
       const next = Object.assign({}, s);
       next.selectedCourseId = id;
       next.courses = Object.assign({}, s.courses);
-      next.courses[id] = { id, name:name.trim(), students:{} };
+      next.courses[id] = { id, name:name.trim(), students:{}, sheetId:null };
       return next;
     });
+
+    // 2) Intentamos crear Google Sheet y guardar sheetId (si hay permisos)
+    try{
+      const sheetId = await createSheetForCourse(name.trim());
+      if(sheetId){
+        setState(s=>{
+          const next = Object.assign({}, s);
+          const c = Object.assign({}, next.courses[id]);
+          c.sheetId = sheetId;
+          next.courses = Object.assign({}, next.courses);
+          next.courses[id] = c;
+          return next;
+        });
+        alert('Se creó la planilla en tu Drive y quedó vinculada al curso.');
+      }
+    }catch(_){}
   }
   function renameCourse(id, newName){
     setState(s=>{
@@ -520,12 +563,19 @@ function App() {
       return next;
     });
   }
-  function editStudent(id, newName){
+  // 👉 ahora acepta objeto {name, condition}
+  function editStudent(id, payload){
     setState(s=>{
       const next = Object.assign({}, s);
       const course = Object.assign({}, next.courses[selectedCourseId]);
       const students = Object.assign({}, course.students);
-      const st = Object.assign({}, students[id]); st.name = newName; students[id] = st;
+      const st = Object.assign({}, students[id]);
+      if (typeof payload === 'string') { st.name = payload; }
+      else if (payload && typeof payload === 'object') {
+        if (payload.name) st.name = payload.name;
+        if (payload.condition) st.condition = payload.condition;
+      }
+      students[id] = st;
       course.students = students;
       next.courses = Object.assign({}, next.courses);
       next.courses[selectedCourseId] = course;
@@ -546,7 +596,7 @@ function App() {
     });
   }
 
-  // Registra marca con fecha; acumula stats y apendea historial [{date,status}]
+  // Asistencia
   function markAttendance(studentId, action, dateStr){
     setState(s=>{
       const next = Object.assign({}, s);
@@ -565,8 +615,6 @@ function App() {
       return next;
     });
   }
-
-  // Deshacer última marca
   function undoAttendance(studentId, action, dateStr){
     setState(s=>{
       const next = Object.assign({}, s);
@@ -593,11 +641,8 @@ function App() {
     });
   }
 
-  // Notas: abrir modal
-  function openGrades(student){
-    setGradesStudent(student);
-    setGradesOpen(true);
-  }
+  // Notas
+  function openGrades(student){ setGradesStudent(student); setGradesOpen(true); }
   function addGrade(studentId, grade){
     setState(s=>{
       const next = Object.assign({}, s);
@@ -682,122 +727,70 @@ function App() {
     }
   }
 
-  // Exportar a XLSX (historial por estudiante con fechas y estado + calificaciones)
+  // Exportar a XLSX (historial + calificaciones)
   function exportXLSX(){
     if (!selectedCourse) { alert('Primero seleccioná un curso.'); return; }
     const course = selectedCourse;
-    // Hoja "Historial": Estudiante | Fecha | Estado
-    const rows = [['Estudiante','Fecha','Estado']];
+
+    // Historial
+    const rowsHist = [['Estudiante','Fecha','Estado']];
     Object.values(course.students).forEach(st => {
-      (st.history || []).forEach(h => {
-        rows.push([st.name, h.date, h.status]);
-      });
-    });
-    // Hoja "Resumen": Estudiante | Presente | Ausente | % Asistencia
-    const resumen = [['Estudiante','Presente','Ausente','% Asistencia']];
-    Object.values(course.students).forEach(st => {
-      const stats = safeStats(st.stats);
-      resumen.push([st.name, stats.present||0, stats.absent||0, pct(stats)]);
-    });
-    // Hoja "Calificaciones": Estudiante | Fecha | Evaluación | Nota
-    const califs = [['Estudiante','Fecha','Evaluación','Nota']];
-    Object.values(course.students).forEach(st => {
-      (st.grades || []).forEach(g => {
-        califs.push([st.name, g.date||'', g.label||'', g.value]);
-      });
-    });
-    // Hoja "Promedios": Estudiante | Promedio
-    const proms = [['Estudiante','Promedio']];
-    Object.values(course.students).forEach(st => {
-      proms.push([st.name, avg(st.grades||[])]);
+      (st.history || []).forEach(h => rowsHist.push([st.name, h.date || '', h.status || '']));
     });
 
-    // Crear libro
+    // Calificaciones
+    const rowsGrades = [['Estudiante','Fecha','Tipo','Nota']];
+    Object.values(course.students).forEach(st => {
+      (st.grades || []).forEach(g => rowsGrades.push([st.name, g.date || '', g.tipo || '', g.value]));
+    });
+
+    // Promedios
+    const rowsAvg = [['Estudiante','Promedio']];
+    Object.values(course.students).forEach(st => rowsAvg.push([st.name, avg(st.grades||[])]));
+    
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Historial');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumen), 'Resumen');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(califs), 'Calificaciones');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(proms), 'Promedios');
-
-    const fileName = `asistencia_${course.name.replace(/[^\w\\-]+/g,'_')}.xlsx`;
-    XLSX.writeFile(wb, fileName);
-  }
-
-  // Modal: mostrar fechas de ausencias de un estudiante
-  function showAbsences(student){
-    const dates = (student.history || []).filter(h => h.status === 'absent').map(h => h.date).sort();
-    setModalStudent(student);
-    setModalDates(dates);
-    setModalOpen(true);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rowsHist), 'Historial');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rowsGrades), 'Calificaciones');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rowsAvg), 'Promedios');
+    XLSX.writeFile(wb, `asistencia_${(course.name||'curso').replace(/\s+/g,'_')}.xlsx`);
   }
 
   return e('div', null,
     e(Header, { selectedDate, onChangeDate:setSelectedDate }),
-    Object.keys(courses).length === 0
-      ? e(EmptyState, { onCreateCourse:createCourse })
-      : e(React.Fragment, null,
-          e(CoursesBar, {
-            courses, selectedCourseId,
-            onSelect:selectCourse, onCreate:createCourse, onRename:renameCourse, onDelete:deleteCourse
-          }),
-          !selectedCourse
-            ? e('div', { className:'p-6 text-slate-700' }, 'Seleccioná un curso para administrar estudiantes, tomar lista y cargar notas.')
-            : e(React.Fragment, null,
-                e('div', { className:'p-4 md:p-6' },
-                  e('h2', { className:'text-xl md:text-2xl font-semibold', style:{ color:'#24496e' } }, selectedCourse.name),
-                  e('p',  { className:'text-slate-700' }, 'Estudiantes: ' + studentsArr.length)
-                ),
-                e(RollCallCard, {
-                  students:studentsArr,
-                  selectedDate,
-                  onMark:markAttendance,
-                  onUndo:undoAttendance
-                }),
-                e(StudentsTable, {
-                  students:selectedCourse.students,
-                  onAdd:addStudent,
-                  onEdit:editStudent,
-                  onDelete:deleteStudent,
-                  onShowAbsences:showAbsences,
-                  onOpenGrades:openGrades
-                }),
-                e(BottomActions, {
-                  onExportJSON:exportStateJSON,
-                  onImportJSON:importStateFromText,
-                  onExportXLSX:exportXLSX
-                })
-              )
-        ),
-
-    e(Modal, {
-      open:modalOpen,
-      title: modalStudent ? `Fechas de ausencia – ${modalStudent.name}` : 'Fechas de ausencia',
-      onClose:()=>setModalOpen(false)
-    },
-      modalDates.length
-        ? e('ul', { className:'list-disc ml-5 space-y-1' }, ...modalDates.map((d,i)=>e('li',{key:i},d)))
-        : e('div', { className:'text-slate-700' }, 'No hay inasistencias registradas.')
+    e('main', { className:'max-w-5xl mx-auto' },
+      Object.keys(courses).length === 0
+        ? e(EmptyState, { onCreateCourse:createCourse })
+        : e(CoursesBar, { courses, selectedCourseId, onSelect:selectCourse, onCreate:createCourse, onRename:renameCourse, onDelete:deleteCourse }),
+      selectedCourse
+        ? e('div', null,
+            selectedCourse.sheetId
+              ? e('p', { className:'px-4 md:px-6 mt-2 text-sm' },
+                  e('a', { href:`https://docs.google.com/spreadsheets/d/${selectedCourse.sheetId}/edit`, target:'_blank', rel:'noopener', className:'underline', style:{color:'#6c467e'} }, 'Abrir Google Sheet')
+                )
+              : null,
+            e(StudentsTable, {
+              students:selectedCourse.students||{},
+              onAdd:addStudent,
+              onEdit:editStudent,
+              onDelete:deleteStudent,
+              onShowAbsences:(s)=>alert((s.history||[]).filter(h=>h.status==='absent').map(h=>h.date).join('\n') || 'Sin ausencias'),
+              onOpenGrades:(s)=>openGrades(s)
+            }),
+            e(RollCallCard, { students:studentsArr, selectedDate, onMark:markAttendance, onUndo:undoAttendance })
+          )
+        : null
     ),
-
+    e(BottomActions, { onExportJSON:exportStateJSON, onImportJSON:importStateFromText, onExportXLSX:exportXLSX }),
     e(GradesModal, {
       open:gradesOpen,
       student:gradesStudent,
       onClose:()=>setGradesOpen(false),
-      onAdd:(grade)=> gradesStudent && addGrade(gradesStudent.id, grade),
-      onEdit:(grade)=> gradesStudent && editGrade(gradesStudent.id, grade),
-      onDelete:(id)=> gradesStudent && deleteGrade(gradesStudent.id, id)
+      onAdd:(g)=>{ if(gradesStudent) addGrade(gradesStudent.id, g); },
+      onEdit:(g)=>{ if(gradesStudent) editGrade(gradesStudent.id, g); },
+      onDelete:(id)=>{ if(gradesStudent) deleteGrade(gradesStudent.id, id); }
     })
   );
 }
 
-// ===== Render =====
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(e(App));
-
-// (tests integrados mínimos)
-(function runSmoke(){
-  function assert(name, cond){ return { name, pass: !!cond }; }
-  const t1 = assert('pct 3/5 = 60%', pct({present:3, absent:2}) === 60);
-  const t2 = assert('avg [6,8] = 7', avg([{value:6},{value:8}]) === 7);
-  console.log('TESTS:', [t1, t2]);
-})();
