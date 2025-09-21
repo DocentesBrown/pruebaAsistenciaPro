@@ -50,7 +50,7 @@ function signOutGoogle() {
 
 // ===== UI =====
 
-function Header({ selectedDate, onChangeDate, user, onLogin, onLogout }) {
+function Header({ selectedDate, onChangeDate }) {
   return e('header',
     { className: 'w-full p-4 md:p-6 text-white flex items-center justify-between sticky top-0 z-10 shadow',
       style:{ background:'#24496e' } },
@@ -58,14 +58,11 @@ function Header({ selectedDate, onChangeDate, user, onLogin, onLogout }) {
       e('div', { className:'flex items-center gap-3' },
         e('span', { className:'text-2xl md:text-3xl font-bold tracking-tight' }, 'Asistencia de Estudiantes')
       ),
-      user
-        ? e('span', { className:'text-xs md:text-sm opacity-90' }, 'Sesión: ' + user.displayName)
-        : e('span', { className:'text-xs md:text-sm opacity-90' }, 'Sin sesión')
+      e('a', { href:'https://www.instagram.com/docentesbrown', target:'_blank', rel:'noopener',
+               className:'text-xs md:text-sm underline', style:{ opacity:.9 } }, 'creado por @docentesbrown')
     ),
     e('div', { className:'flex items-center gap-2' },
-      user
-        ? e('button', { onClick:onLogout, className:'px-3 py-1 rounded-xl text-sm bg-red-500 text-white' }, 'Cerrar sesión')
-        : e('button', { onClick:onLogin, className:'px-3 py-1 rounded-xl text-sm bg-green-500 text-white' }, 'Iniciar con Google'),
+      e('label', { className:'text-sm opacity-90 hidden md:block' }, 'Fecha:'),
       e('input', { type:'date', value:selectedDate,
         onChange:(ev)=>onChangeDate(ev.target.value),
         className:'rounded-md px-2 py-1 text-sm', style:{ color:'#24496e' } })
@@ -454,8 +451,6 @@ function AbsencesModal({ open, student, onClose, onApplyChange }) {
 
 function App() {
   const [state, setState] = useState(loadState());
-  const [user, setUser] = useState(null);
-
   const courses = state.courses;
   const selectedCourseId = state.selectedCourseId;
   const selectedDate = state.selectedDate || todayStr();
@@ -468,33 +463,7 @@ function App() {
   const [absencesOpen, setAbsencesOpen] = useState(false);
   const [absencesStudentId, setAbsencesStudentId] = useState(null);
 
-  // Detectar cambios de sesión
-  useEffect(() => {
-    const unsub = firebase.auth().onAuthStateChanged(async (u) => {
-      if (u) {
-        setUser(u);
-        const doc = await db.collection("users").doc(u.uid).get();
-        if (doc.exists) {
-          setState(doc.data());
-        } else {
-          await db.collection("users").doc(u.uid).set(state);
-        }
-      } else {
-        setUser(null);
-        setState(loadState());
-      }
-    });
-    return () => unsub();
-  }, []);
-
-  // Guardar cambios según login o localStorage
-  useEffect(() => {
-    if (user) {
-      db.collection("users").doc(user.uid).set(state);
-    } else {
-      saveState(state);
-    }
-  }, [state, user]);
+  useEffect(() => { saveState(state); }, [state]);
 
   const selectedCourse = selectedCourseId ? courses[selectedCourseId] : null;
 
@@ -737,15 +706,18 @@ function App() {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rowsAvg), 'Promedios');
     XLSX.writeFile(wb, `asistencia_${(course.name||'curso').replace(/\s+/g,'_')}.xlsx`);
   }
+
   return e('div', null,
-    e(Header, { selectedDate, onChangeDate:setSelectedDate, user, onLogin:signInWithGoogle, onLogout:signOutGoogle }),
+    e(Header, { selectedDate, onChangeDate:setSelectedDate }),
     e('main', { className:'max-w-5xl mx-auto' },
       Object.keys(courses).length === 0
         ? e(EmptyState, { onCreateCourse:createCourse })
         : e(CoursesBar, { courses, selectedCourseId, onSelect:selectCourse, onCreate:createCourse, onRename:renameCourse, onDelete:deleteCourse }),
       selectedCourse
         ? e('div', null,
+            // Primero tarjeta de lista
             e(RollCallCard, { students:studentsArr, selectedDate, onMark:markAttendance, onUndo:undoAttendance }),
+            // Luego tabla (abajo)
             e(StudentsTable, {
               students:selectedCourse.students||{},
               onAdd:addStudent,
@@ -769,15 +741,3 @@ function App() {
     e(AbsencesModal, {
       open:absencesOpen,
       student:absencesStudent,
-      onClose:()=>setAbsencesOpen(false),
-      onApplyChange:(histId, reason)=>{
-        if(absencesStudent){
-          applyAbsenceChange(absencesStudent.id, histId, reason);
-        }
-      }
-    })
-  );
-}
-
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(e(App));
