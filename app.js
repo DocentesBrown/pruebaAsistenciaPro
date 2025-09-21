@@ -2,7 +2,7 @@
 const { useEffect, useMemo, useState, useRef } = React;
 const e = React.createElement;
 
-const LS_KEY = 'agenda_estudiantes_v4'; // bump
+const LS_KEY = 'agenda_estudiantes_sin_google_v1';
 function uid(prefix) { prefix = prefix || 'id'; return prefix + '_' + Math.random().toString(36).slice(2,9); }
 function safeStats(stats) { return stats && typeof stats === 'object' ? stats : { present:0, absent:0, later:0 }; }
 function pct(stats) { const s = safeStats(stats); const d = (s.present||0) + (s.absent||0); return d ? Math.round((s.present/d)*100) : 0; }
@@ -22,89 +22,23 @@ function avg(arr){
 function loadState() {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    const base = { courses:{}, selectedCourseId:null, selectedDate: todayStr(), googleConnected:false };
+    const base = { courses:{}, selectedCourseId:null, selectedDate: todayStr() };
     if (!raw) return base;
     const parsed = JSON.parse(raw);
-    return Object.assign(base, parsed, { selectedDate: todayStr() });
+    return {
+      courses: parsed.courses || {},
+      selectedCourseId: parsed.selectedCourseId || null,
+      selectedDate: todayStr()
+    };
   } catch {
-    return { courses:{}, selectedCourseId:null, selectedDate: todayStr(), googleConnected:false };
+    return { courses:{}, selectedCourseId:null, selectedDate: todayStr() };
   }
 }
 function saveState(state){ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
 
-// ===== Google APIs auth via GIS (token) =====
-function hasGoogleToken(){
-  try{
-    const t = gapi && gapi.client && gapi.client.getToken && gapi.client.getToken();
-    return !!(t && t.access_token);
-  }catch(_) { return false; }
-}
-async function connectGoogleInteractive(){
-  if(!(window._gapiReady && window._gisReady && window.gapi && window.tokenClient)){
-    throw new Error('Google API no listo. Recargá la página luego de 2-3 segundos.');
-  }
-  return await new Promise((resolve, reject) => {
-    try{
-      window.tokenClient.callback = (resp) => {
-        if(resp && resp.access_token){
-          gapi.client.setToken({ access_token: resp.access_token });
-          resolve(true);
-        }else if(resp && resp.error){
-          reject(new Error(resp.error));
-        }else{
-          reject(new Error('No se pudo obtener el token.'));
-        }
-      };
-      window.tokenClient.requestAccessToken({ prompt: hasGoogleToken() ? '' : 'consent' });
-    }catch(err){
-      reject(err);
-    }
-  });
-}
-async function ensureGapiAuthed(){
-  if(hasGoogleToken()) return true;
-  try { return await connectGoogleInteractive(); }
-  catch(err){ console.error('Auth error', err); return false; }
-}
-
-async function createSheetForCourse(name){
-  const ok = await ensureGapiAuthed();
-  if(!ok) throw new Error('Sin autorización de Google.');
-  if(!gapi || !gapi.client || !gapi.client.sheets) throw new Error('Sheets API no disponible.');
-
-  const res = await gapi.client.sheets.spreadsheets.create({
-    properties: { title: `Asistencia – ${name}` },
-    sheets: [
-      { properties: { title: 'Resumen' } },
-      { properties: { title: 'Historial' } },
-      { properties: { title: 'Calificaciones' } },
-      { properties: { title: 'Promedios' } }
-    ]
-  });
-  const id = res.result.spreadsheetId;
-
-  // Encabezados
-  await gapi.client.sheets.spreadsheets.values.update({
-    spreadsheetId: id, range: 'Resumen!A1:D1', valueInputOption: 'RAW',
-    resource: { values: [['Estudiante','Presente','Ausente','% Asistencia']] }
-  });
-  await gapi.client.sheets.spreadsheets.values.update({
-    spreadsheetId: id, range: 'Historial!A1:C1', valueInputOption: 'RAW',
-    resource: { values: [['Estudiante','Fecha','Estado']] }
-  });
-  await gapi.client.sheets.spreadsheets.values.update({
-    spreadsheetId: id, range: 'Calificaciones!A1:D1', valueInputOption: 'RAW',
-    resource: { values: [['Estudiante','Fecha','Tipo','Nota']] }
-  });
-  await gapi.client.sheets.spreadsheets.values.update({
-    spreadsheetId: id, range: 'Promedios!A1:B1', valueInputOption: 'RAW',
-    resource: { values: [['Estudiante','Promedio']] }
-  });
-  return id;
-}
-
 // ===== UI =====
-function Header({ selectedDate, onChangeDate, googleConnected, onConnectGoogle }) {
+
+function Header({ selectedDate, onChangeDate }) {
   return e('header',
     { className: 'w-full p-4 md:p-6 text-white flex items-center justify-between sticky top-0 z-10 shadow',
       style:{ background:'#24496e' } },
@@ -116,19 +50,10 @@ function Header({ selectedDate, onChangeDate, googleConnected, onConnectGoogle }
                className:'text-xs md:text-sm underline', style:{ opacity:.9 } }, 'creado por @docentesbrown')
     ),
     e('div', { className:'flex items-center gap-2' },
-      e('input', {
-        type:'date',
-        value:selectedDate,
+      e('label', { className:'text-sm opacity-90 hidden md:block' }, 'Fecha:'),
+      e('input', { type:'date', value:selectedDate,
         onChange:(ev)=>onChangeDate(ev.target.value),
-        className:'rounded-md px-2 py-1 text-sm',
-        style:{ color:'#24496e' }
-      }),
-      e('button', {
-        onClick:onConnectGoogle,
-        className:'px-3 py-1.5 rounded-md text-sm font-semibold',
-        style:{ background: googleConnected ? '#16a34a' : '#6c467e', color:'#fff' },
-        title: googleConnected ? 'Conectado a Google' : 'Conectar a Google'
-      }, googleConnected ? '✓ Google conectado' : 'Conectar Google')
+        className:'rounded-md px-2 py-1 text-sm', style:{ color:'#24496e' } })
     )
   );
 }
@@ -362,7 +287,7 @@ function Modal({ open, title, onClose, children }) {
   );
 }
 
-// Modal de calificaciones (sin descripción) - AHORA se re-renderiza automáticamente
+// Modal de calificaciones (sin descripción) - lee SIEMPRE del estado para refrescar en vivo
 function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
   const [tipo, setTipo] = useState('escrito');
   const [date, setDate] = useState(todayStr());
@@ -440,9 +365,11 @@ function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
 
 function App() {
   const [state, setState] = useState(loadState());
-  const { courses, selectedCourseId, selectedDate, googleConnected } = state;
+  const courses = state.courses;
+  const selectedCourseId = state.selectedCourseId;
+  const selectedDate = state.selectedDate || todayStr();
 
-  // Para el modal: guardamos SOLO el id; el alumno se mira SIEMPRE desde state.
+  // Modal de notas: guardamos el ID para leer SIEMPRE desde state (así refresca en vivo)
   const [gradesOpen, setGradesOpen] = useState(false);
   const [gradesStudentId, setGradesStudentId] = useState(null);
 
@@ -452,20 +379,7 @@ function App() {
 
   function setSelectedDate(dateStr){ setState(s => Object.assign({}, s, { selectedDate: dateStr || todayStr() })); }
   function selectCourse(id){ setState(s => Object.assign({}, s, { selectedCourseId:id })); }
-
-  async function connectGoogle(){
-    try{
-      const ok = await connectGoogleInteractive();
-      setState(s => Object.assign({}, s, { googleConnected: !!ok }));
-      if(!ok) alert('No se pudo conectar con Google.');
-    }catch(err){
-      const msg = String(err && err.message ? err.message : err);
-      alert('Error de Google OAuth: ' + msg + '\n\nPosibles causas:\n- clientId/API key inválidos\n- Origen no autorizado en GCP (Authorized JavaScript origins)\n- La app está servida como file:// (usá http:// o https://)');
-      setState(s => Object.assign({}, s, { googleConnected:false }));
-    }
-  }
-
-  async function createCourse(){
+  function createCourse(){
     const name = prompt('Nombre del curso (ej. 3°B - Matemática)');
     if (!name || !name.trim()) return;
     const id = uid('curso');
@@ -473,27 +387,9 @@ function App() {
       const next = Object.assign({}, s);
       next.selectedCourseId = id;
       next.courses = Object.assign({}, s.courses);
-      next.courses[id] = { id, name:name.trim(), students:{}, sheetId:null };
+      next.courses[id] = { id, name:name.trim(), students:{} };
       return next;
     });
-    // Intento crear Sheet
-    try{
-      const sheetId = await createSheetForCourse(name.trim());
-      if(sheetId){
-        setState(s=>{
-          const next = Object.assign({}, s);
-          const c = Object.assign({}, next.courses[id]);
-          c.sheetId = sheetId;
-          next.courses = Object.assign({}, next.courses);
-          next.courses[id] = c;
-          return next;
-        });
-        alert('Se creó la planilla en tu Drive y quedó vinculada al curso.');
-      }
-    }catch(err){
-      console.error(err);
-      alert('No se pudo crear la planilla.\nPodés usar el botón "Conectar Google" (arriba derecha) y volver a intentar.\nMensaje: ' + (err && err.message ? err.message : err));
-    }
   }
   function renameCourse(id, newName){
     setState(s=>{
@@ -639,7 +535,6 @@ function App() {
     return Object.values(selectedCourse.students).sort((a,b)=>a.name.localeCompare(b.name));
   }, [selectedCourse]);
 
-  // Para el modal: obtenemos SIEMPRE el alumno fresco desde state
   const gradesStudent = selectedCourse && gradesStudentId ? selectedCourse.students[gradesStudentId] || null : null;
 
   function exportStateJSON(){
@@ -655,7 +550,7 @@ function App() {
   function importStateFromText(text){
     try{
       const parsed = JSON.parse(text);
-      const next = { courses: parsed && typeof parsed.courses==='object' ? parsed.courses : {}, selectedCourseId: parsed && parsed.selectedCourseId ? parsed.selectedCourseId : null, selectedDate: todayStr(), googleConnected:false };
+      const next = { courses: parsed && typeof parsed.courses==='object' ? parsed.courses : {}, selectedCourseId: parsed && parsed.selectedCourseId ? parsed.selectedCourseId : null, selectedDate: todayStr() };
       setState(next); alert('Importación exitosa.');
     } catch(err){ alert('Archivo inválido.'); }
   }
@@ -676,19 +571,16 @@ function App() {
   }
 
   return e('div', null,
-    e(Header, { selectedDate, onChangeDate:setSelectedDate, googleConnected, onConnectGoogle:connectGoogle }),
+    e(Header, { selectedDate, onChangeDate:setSelectedDate }),
     e('main', { className:'max-w-5xl mx-auto' },
       Object.keys(courses).length === 0
         ? e(EmptyState, { onCreateCourse:createCourse })
         : e(CoursesBar, { courses, selectedCourseId, onSelect:selectCourse, onCreate:createCourse, onRename:renameCourse, onDelete:deleteCourse }),
       selectedCourse
         ? e('div', null,
-            selectedCourse.sheetId
-              ? e('p', { className:'px-4 md:px-6 mt-2 text-sm' },
-                  e('a', { href:`https://docs.google.com/spreadsheets/d/${selectedCourse.sheetId}/edit`, target:'_blank', rel:'noopener', className:'underline', style:{color:'#6c467e'} }, 'Abrir Google Sheet')
-                )
-              : null,
+            // Primero tarjeta de lista
             e(RollCallCard, { students:studentsArr, selectedDate, onMark:markAttendance, onUndo:undoAttendance }),
+            // Luego tabla (abajo)
             e(StudentsTable, {
               students:selectedCourse.students||{},
               onAdd:addStudent,

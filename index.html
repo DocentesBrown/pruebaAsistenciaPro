@@ -12,7 +12,7 @@
     <link rel="manifest" href="manifest.json" />
     <meta name="theme-color" content="#24496e" />
 
-    <!-- SheetJS -->
+    <!-- SheetJS (solo para exportar .xlsx locales) -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" crossorigin></script>
 
     <style>
@@ -24,48 +24,6 @@
       }
       body{ background:var(--crema); }
     </style>
-
-    <!-- CONFIG: poné tus credenciales reales acá -->
-    <script>
-      window.GAPI_CONFIG = {
-        apiKey: 'TU_API_KEY',
-        clientId: 'TU_CLIENT_ID.apps.googleusercontent.com',
-        discoveryDocs: [
-          'https://sheets.googleapis.com/$discovery/rest?version=v4',
-          'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'
-        ],
-        scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets'
-      };
-      window._gapiReady = false;
-      window._gisReady = false;
-      window.tokenClient = null;
-
-      function gapiLoaded(){
-        gapi.load('client', async () => {
-          try{
-            await gapi.client.init({
-              apiKey: GAPI_CONFIG.apiKey,
-              discoveryDocs: GAPI_CONFIG.discoveryDocs
-            });
-            window._gapiReady = true;
-          }catch(e){
-            console.warn('gapi init error', e);
-          }
-        });
-      }
-      function gisLoaded(){
-        try{
-          window.tokenClient = google.accounts.oauth2.initTokenClient({
-            client_id: GAPI_CONFIG.clientId,
-            scope: GAPI_CONFIG.scope,
-            callback: () => {}
-          });
-          window._gisReady = true;
-        }catch(e){ console.warn('gis init error', e); }
-      }
-    </script>
-    <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
-    <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
   </head>
   <body class="min-h-dvh text-slate-900">
     <div id="root"></div>
