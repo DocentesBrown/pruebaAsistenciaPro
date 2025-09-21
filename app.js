@@ -3,6 +3,8 @@ const { useEffect, useMemo, useState, useRef } = React;
 const e = React.createElement;
 
 const LS_KEY = 'agenda_estudiantes_sin_google_v5';
+const TEACHER_LS_KEY = 'teacher_profile_v1';
+
 function uid(prefix) { prefix = prefix || 'id'; return prefix + '_' + Math.random().toString(36).slice(2,9); }
 function safeStats(stats) { return stats && typeof stats === 'object' ? stats : { present:0, absent:0, later:0 }; }
 function pct(stats) { const s = safeStats(stats); const d = (s.present||0) + (s.absent||0); return d ? Math.round((s.present/d)*100) : 0; }
@@ -36,30 +38,32 @@ function loadState() {
 }
 function saveState(state){ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
 
+// Perfil de profe (dispositivo)
+function loadTeacher(){
+  try { return JSON.parse(localStorage.getItem(TEACHER_LS_KEY)) || { name:'', article:'la' }; }
+  catch { return { name:'', article:'la' }; }
+}
+function saveTeacher(t){ localStorage.setItem(TEACHER_LS_KEY, JSON.stringify(t)); }
+
 function sanitizePhone(phoneRaw=''){
-  // Normaliza números de AR para WhatsApp (wa.me):
-  // - Solo dígitos
-  // - Quita '00' internacional o '0' nacional inicial
-  // - Elimina '15' luego del prefijo de área
-  // - Asegura prefijo país '54' y dígito '9' (móviles) -> 549 + área + número
+  // Normaliza números de AR para WhatsApp (wa.me)
   let d = String(phoneRaw).replace(/\D+/g, '');
   if (!d) return '';
   if (d.startsWith('00')) d = d.slice(2);
   if (d.startsWith('0')) d = d.slice(1);
-  // Si ya viene con 54 y tiene '15' tras el área, eliminarlo
   d = d.replace(/^54(9?)(\d{2,4})15(\d{7,8})$/, '54$1$2$3');
-  // Si NO tiene 54 y parece local (10-11 dígitos), anteponer 54
   if (!d.startsWith('54') && d.length >= 10 && d.length <= 11) d = '54' + d;
-  // Si ahora tiene 54 pero no 549, insertar 9 (móviles)
   if (d.startsWith('54') && d[2] !== '9') d = '54' + '9' + d.slice(2);
-  // Casos con 549 + área + '15' + número (algunos ingresan así): quitar '15'
   d = d.replace(/^549(\d{2,4})15(\d{7,8})$/, '549$1$2');
   return d;
 }
-function buildRiskMessage(course, student, attendancePct, promedio){
+function buildRiskMessage(course, student, attendancePct, promedio, teacher){
   const courseName = course?.name || 'curso';
   const pName = student?.name || '';
-  const msg = `Hola, soy la profe. Aviso de RIESGO para ${pName} (${courseName}). Asistencia: ${attendancePct}%. Promedio: ${promedio}.`;
+  const art = (teacher?.article || 'la').trim();
+  const tName = (teacher?.name || '').trim();
+  const saludo = tName ? `Hola, soy ${art} profe ${tName}.` : 'Hola, soy la profe.';
+  const msg = `${saludo} Aviso de RIESGO para ${pName} (${courseName}). Asistencia: ${attendancePct}%. Promedio: ${promedio}.`;
   return encodeURIComponent(msg);
 }
 
@@ -149,8 +153,8 @@ function StudentsTable({ course, students, onAdd, onEdit, onDelete, onShowAbsenc
             e('th', { className:'p-3 text-sm' }, 'Presente'),
             e('th', { className:'p-3 text-sm' }, 'Ausente'),
             e('th', { className:'p-3 text-sm' }, 'Promedio'),
-            e('th', { className:'p-3 text-sm' }),
-            e('th', { className:'p-3 text-sm' })
+            e('th', { className:'p-3 text-sm' }),             // columna de riesgo (opcional)
+            e('th', { className:'p-3 text-sm' }, 'Notas')     // título pedido
           )
         ),
         e('tbody', null,
@@ -315,7 +319,7 @@ function Modal({ open, title, onClose, children }) {
   );
 }
 
-// Modal de calificaciones (sin descripción)
+// Modal de calificaciones
 function GradesModal({ open, student, onClose, onAdd, onEdit, onDelete }) {
   const [tipo, setTipo] = useState('escrito');
   const [date, setDate] = useState(todayStr());
@@ -403,7 +407,6 @@ function AbsencesModal({ open, student, onClose, onApplyChange }) {
     .slice()
     .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
 
-  // Conteo: solo cuentan los 'absent' (justificada sigue contando)
   const totalAusentes = rows.filter(r => r.status === 'absent').length;
 
   function labelFor(r){
@@ -539,23 +542,47 @@ function NewCourseModal({ open, onClose, onCreate }){
   );
 }
 
-// Acciones inferiores
-function BottomActions({ onOpenExport }) {
-  return e('div', { className:'p-6 mt-6 text-center' },
-    e('button', { onClick:onOpenExport, className:'px-4 py-3 rounded-2xl text-white font-semibold', style:{ background:'#24496e' } }, 'Exportar / Importar')
-  );
-} },
-    e('div', { className:'max-w-3xl mx-auto' },
-      e('button', { onClick:onOpenExport, className:'w-full px-4 py-3 rounded-2xl text-white font-semibold', style:{ background:'#24496e' } }, 'Exportar / Importar')
+// Modal Perfil del/la profe
+function TeacherProfileModal({ open, onClose, onSave, initial }){
+  const [name, setName] = React.useState(initial?.name || '');
+  const [article, setArticle] = React.useState(initial?.article || 'la');
+  useEffect(() => { if(open){ setName(initial?.name || ''); setArticle(initial?.article || 'la'); } }, [open]);
+  if(!open) return null;
+  return e(Modal, { open, title:'Tu perfil de profe', onClose },
+    e('div', { className:'space-y-4' },
+      e('p', { className:'text-sm text-slate-700' }, 'Usamos estos datos cuando se envía el aviso por WhatsApp al/la preceptor/a.'),
+      e('div', null,
+        e('label', { className:'block text-sm font-medium mb-1', style:{ color:'#24496e' } }, 'Nombre completo'),
+        e('input', { value:name, onChange:ev=>setName(ev.target.value),
+          className:'w-full px-3 py-2 border rounded-xl', style:{ borderColor:'#d7dbe0' }, placeholder:'Ej: Natalia Pérez' })
+      ),
+      e('div', null,
+        e('label', { className:'block text-sm font-medium mb-1', style:{ color:'#24496e' } }, 'Artículo'),
+        e('select', { value:article, onChange:ev=>setArticle(ev.target.value),
+          className:'px-3 py-2 border rounded-xl', style:{ borderColor:'#d7dbe0' } },
+          e('option', {value:'la'}, 'la'),
+          e('option', {value:'el'}, 'el'),
+          e('option', {value:'le'}, 'le')
+        )
+      ),
+      e('div', null,
+        e('button', { onClick:()=>{ onSave({ name:name.trim(), article }); onClose(); },
+          className:'px-4 py-2 rounded-xl text-white font-semibold', style:{ background:'#6c467e' } }, 'Guardar')
+      )
     )
   );
 }
 
+// App principal
 function App() {
   const [state, setState] = useState(loadState());
   const courses = state.courses;
   const selectedCourseId = state.selectedCourseId;
   const selectedDate = state.selectedDate || todayStr();
+
+  // Perfil del/la profe
+  const [teacher, setTeacher] = useState(loadTeacher());
+  const [teacherOpen, setTeacherOpen] = useState(false);
 
   // Modal de notas
   const [gradesOpen, setGradesOpen] = useState(false);
@@ -570,6 +597,20 @@ function App() {
   const [newCourseOpen, setNewCourseOpen] = useState(false);
 
   useEffect(() => { saveState(state); }, [state]);
+
+  // Primer inicio: pedir nombre
+  useEffect(() => {
+    if(!(teacher && teacher.name)){
+      setTeacherOpen(true);
+    }
+  }, []);
+  useEffect(() => { if(teacher) saveTeacher(teacher); }, [teacher]);
+
+  // Exponer función para abrir Exportar/Importar desde el footer
+  useEffect(() => {
+    window.__openExport = () => setExportOpen(true);
+    return () => { try { delete window.__openExport; } catch(_){} };
+  }, []);
 
   const selectedCourse = selectedCourseId ? courses[selectedCourseId] : null;
 
@@ -728,7 +769,6 @@ function App() {
     });
   }
 
-  // Cambiar/Eliminar inasistencia con motivo (tarde/justificada/erronea)
   function applyAbsenceChange(studentId, histId, reason){
     setState(s=>{
       const next = Object.assign({}, s);
@@ -738,17 +778,15 @@ function App() {
       const stats = safeStats(st.stats);
       const hist = (st.history || []).slice();
       const idx = hist.findIndex(h => h.id === histId);
-      if (idx === -1) return s; // no changes
+      if (idx === -1) return s;
 
       const entry = Object.assign({}, hist[idx]);
 
       if (reason === 'erronea') {
-        // Si era ausencia, descuenta; si era tarde, descuenta tarde
         if (entry.status === 'absent' && stats.absent > 0) stats.absent -= 1;
         if (entry.status === 'tarde'  && stats.later  > 0) stats.later  -= 1;
         hist.splice(idx, 1);
       } else if (reason === 'tarde') {
-        // Convertir a TARDE: no cuenta como ausente, sí como "later"
         if (entry.status === 'absent') {
           if (stats.absent > 0) stats.absent -= 1;
           stats.later = (stats.later || 0) + 1;
@@ -757,7 +795,6 @@ function App() {
         delete entry.reason;
         hist[idx] = entry;
       } else if (reason === 'justificada') {
-        // Mantener status 'absent' y marcar reason='justificada'. No se tocan contadores.
         entry.status = 'absent';
         entry.reason = 'justificada';
         hist[idx] = entry;
@@ -816,10 +853,14 @@ function App() {
     const course = selectedCourse;
     const phone = sanitizePhone(course?.preceptor?.phone || '');
     if(!phone){ alert('Este curso no tiene teléfono de preceptor configurado.'); return; }
-    const url = `https://wa.me/${phone}?text=${buildRiskMessage(course, student, attendancePct, promedio.toFixed(2))}`;
+    const url = `https://wa.me/${phone}?text=${buildRiskMessage(course, student, attendancePct, promedio.toFixed(2), teacher)}`;
     if(confirm(`Se abrirá WhatsApp para avisar al preceptor (${course.preceptor.name||''}). ¿Continuar?`)){
       window.open(url, '_blank', 'noopener');
     }
+  }
+
+  function saveTeacherProfile(t){
+    setTeacher({ name: (t?.name || '').trim(), article: (t?.article || 'la') });
   }
 
   return e('div', null,
@@ -830,9 +871,7 @@ function App() {
         : e(CoursesBar, { courses, selectedCourseId, onSelect:selectCourse, onCreate:createCourse, onRename:renameCourse, onDelete:deleteCourse }),
       selectedCourse
         ? e('div', null,
-            // Primero tarjeta de lista
             e(RollCallCard, { students:studentsArr, selectedDate, onMark:markAttendance, onUndo:undoAttendance }),
-            // Luego tabla (abajo)
             e(StudentsTable, {
               course:selectedCourse,
               students:selectedCourse.students||{},
@@ -846,7 +885,6 @@ function App() {
           )
         : null
     ),
-    e(BottomActions, { onOpenExport:()=>setExportOpen(true) }),
     e(ExportModal, {
       open:exportOpen,
       onClose:()=>setExportOpen(false),
@@ -876,6 +914,12 @@ function App() {
           applyAbsenceChange(absencesStudent.id, histId, reason);
         }
       }
+    }),
+    e(TeacherProfileModal, {
+      open: teacherOpen,
+      onClose: ()=> setTeacherOpen(false),
+      onSave: saveTeacherProfile,
+      initial: teacher
     })
   );
 }
