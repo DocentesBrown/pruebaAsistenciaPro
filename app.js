@@ -786,15 +786,17 @@ function App() {
         if (entry.status === 'absent' && stats.absent > 0) stats.absent -= 1;
         if (entry.status === 'tarde'  && stats.later  > 0) stats.later  -= 1;
 
-        // Corregir a Presente (mantener fecha)
+        // ✅ Reetiquetar a presente y sumar 1 a presentes
         entry.status = 'present';
         delete entry.reason;
         stats.present = (stats.present || 0) + 1;
         hist[idx] = entry;
       } else if (reason === 'tarde') {
-        if (entry.status === 'absent') {
-          if (stats.absent > 0) stats.absent -= 1;
+        // ✅ Convertir a 'tarde' y contar como presencia también
+        if (entry.status !== 'tarde') {
+          if (entry.status === 'absent' && stats.absent > 0) stats.absent -= 1;
           stats.later = (stats.later || 0) + 1;
+          stats.present = (stats.present || 0) + 1;
         }
         entry.status = 'tarde';
         delete entry.reason;
