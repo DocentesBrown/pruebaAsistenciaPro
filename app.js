@@ -786,7 +786,7 @@ function App() {
         if (entry.status === 'absent' && stats.absent > 0) stats.absent -= 1;
         if (entry.status === 'tarde'  && stats.later  > 0) stats.later  -= 1;
 
-        // ✅ Reetiquetar como presente (mantener fecha y trazabilidad)
+        // Corregir a Presente (mantener fecha)
         entry.status = 'present';
         delete entry.reason;
         stats.present = (stats.present || 0) + 1;
