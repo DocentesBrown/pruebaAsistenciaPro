@@ -137,8 +137,8 @@ function LoginScreen({ onLogin }){
     if(api){
       const correo = prompt('Ingresá tu correo (para enviarte un código):') || '';
       if(!correo) return;
-      fetch(api, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'recover', usuario, correo })})
-        .then(r => r.ok ? alert('Si los datos coinciden, se envió un mail con instrucciones.') : alert('No se pudo procesar el pedido.'))
+      fetch(api, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({ action:'recover', usuario, correo }).toString() })
+        .then(async r => { try{ const j = await r.json(); if(j.status==='ok'){ alert('Listo: revisá tu correo / nueva clave enviada.'); } else { alert('No se pudo procesar: ' + (j.message||'error')); } } catch(_){ alert('Pedido enviado. Si es correcto, recibirás instrucciones.'); } })
         .catch(()=> alert('No se pudo contactar al servidor.'));
     } else {
       AdminMailLink('Recuperar contraseña', `Usuario: ${usuario}\nCorreo: (completá aquí)\n\nSolicito recuperar la contraseña.`);
@@ -151,8 +151,8 @@ function LoginScreen({ onLogin }){
       const actual = prompt('Tu contraseña actual:') || '';
       const nueva = prompt('Nueva contraseña:') || '';
       if(!nueva) return;
-      fetch(api, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'change', usuario, password_actual: actual, password_nueva: nueva })})
-        .then(r => r.ok ? alert('Solicitud enviada. Actualizá e iniciá sesión con la nueva contraseña.') : alert('No se pudo cambiar la contraseña.'))
+      fetch(api, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({ action:'change', usuario, password_actual: actual, password_nueva: nueva }).toString() })
+        .then(async r => { try{ const j = await r.json(); if(j.status==='ok'){ alert('Contraseña cambiada. Volvé a iniciar sesión.'); clearSession(); location.reload(); } else { alert('No se pudo cambiar: ' + (j.message||'error')); } } catch(_){ alert('Solicitud enviada. Si es correcta, se aplicará el cambio.'); } })
         .catch(()=> alert('No se pudo contactar al servidor.'));
     } else {
       AdminMailLink('Cambiar contraseña', `Usuario: ${usuario}\n\nSolicito cambiar mi contraseña.`);
@@ -179,6 +179,62 @@ function LoginScreen({ onLogin }){
         e('div', { className:'flex items-center justify-between text-sm pt-1' },
           e('button', { type:'button', onClick:forgotPassword, className:'underline', style:{color:'#24496e'} }, 'Olvidé mi contraseña'),
           e('button', { type:'button', onClick:changePassword, className:'underline', style:{color:'#24496e'} }, 'Cambiar contraseña')
+        )
+      )
+    )
+  );
+}
+
+
+function ChangePasswordPanel({ usuario, onClose }){
+  const [actual, setActual] = useState('');
+  const [nueva, setNueva] = useState('');
+  const [repite, setRepite] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  async function submit(ev){
+    ev && ev.preventDefault();
+    setMsg(''); 
+    if(!nueva || nueva !== repite){ setMsg('La nueva contraseña no coincide.'); return; }
+    const api = (window.PASSWORD_API_URL || '').trim();
+    if(!api){ setMsg('PASSWORD_API_URL no está configurada.'); return; }
+    setLoading(true);
+    try {
+      const body = new URLSearchParams({ action:'change', usuario, password_actual: actual, password_nueva: nueva }).toString();
+      const r = await fetch(api, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body });
+      let ok = false, err='';
+      try { const j = await r.json(); ok = (j.status==='ok'); err = j.message||''; } catch(_){ ok = r.ok; }
+      if(ok){
+        setMsg('¡Contraseña actualizada! Cerrando…');
+        setTimeout(()=>{ onClose && onClose(); alert('Volvé a iniciar sesión con tu nueva contraseña.'); clearSession(); location.reload(); }, 800);
+      } else {
+        setMsg('No se pudo cambiar: ' + (err||'error'));
+      }
+    } catch(e){ setMsg('Error de red.'); }
+    finally{ setLoading(false); }
+  }
+
+  return e('div', { className:'fixed inset-0 bg-black/30 flex items-center justify-center p-4', role:'dialog' },
+    e('div', { className:'w-full max-w-sm bg-white rounded-3xl p-5 shadow' },
+      e('div', { className:'text-lg font-semibold mb-2', style:{color:'#24496e'} }, 'Cambiar contraseña'),
+      e('form', { onSubmit:submit, className:'space-y-3' },
+        e('div', null,
+          e('label', { className:'block text-sm mb-1' }, 'Contraseña actual'),
+          e('input', { type:'password', value:actual, onChange:e=>setActual(e.target.value), className:'w-full px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'} })
+        ),
+        e('div', null,
+          e('label', { className:'block text-sm mb-1' }, 'Nueva contraseña'),
+          e('input', { type:'password', value:nueva, onChange:e=>setNueva(e.target.value), className:'w-full px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'} })
+        ),
+        e('div', null,
+          e('label', { className:'block text-sm mb-1' }, 'Repetir nueva contraseña'),
+          e('input', { type:'password', value:repite, onChange:e=>setRepite(e.target.value), className:'w-full px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'} })
+        ),
+        msg ? e('div', { className:'text-sm', style:{color: msg.startsWith('¡')?'#2b647b':'#b91c1c'} }, msg) : null,
+        e('div', { className:'flex gap-2 justify-end' },
+          e('button', { type:'button', onClick:onClose, className:'px-3 py-2 rounded-xl', style:{background:'#f3efdc', color:'#24496e'} }, 'Cancelar'),
+          e('button', { type:'submit', disabled:loading, className:'px-3 py-2 rounded-xl text-white', style:{background:'#6c467e', opacity: loading? .7:1} }, loading ? 'Guardando…' : 'Guardar')
         )
       )
     )
