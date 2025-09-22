@@ -67,6 +67,142 @@ function buildRiskMessage(course, student, attendancePct, promedio, teacher){
   return encodeURIComponent(msg);
 }
 
+
+// ====== Auth helpers ======
+const SESSION_KEY = 'session_user_v1';
+
+function parseCSV(text){
+  // Simple CSV parser (no quoted commas); fits our sheet
+  const rows = text.trim().split(/\r?\n/);
+  if(!rows.length) return [];
+  // detect header
+  const header = rows[0].split(',').map(h => h.trim().toLowerCase());
+  const mapping = { usuario: header.indexOf('usuario'), contrasena: header.indexOf('contraseña'), correo: header.indexOf('correo') };
+  const items = [];
+  for (let i=1;i<rows.length;i++){
+    const cols = rows[i].split(',').map(c => c.trim());
+    const usuario = mapping.usuario>=0 ? cols[mapping.usuario] : cols[0];
+    const contrasena = mapping.contrasena>=0 ? cols[mapping.contrasena] : cols[1];
+    const correo = mapping.correo>=0 ? cols[mapping.correo] : cols[2] || '';
+    items.push({ usuario, contrasena, correo });
+  }
+  return items;
+}
+
+async function fetchUsers(){
+  const url = (window.USERS_CSV_URL || '').trim();
+  if(!url) throw new Error('Falta USERS_CSV_URL');
+  const res = await fetch(url + '&_=' + Date.now());
+  if(!res.ok) throw new Error('No se pudo leer la hoja');
+  const text = await res.text();
+  return parseCSV(text);
+}
+
+function loadSession(){ try { return JSON.parse(localStorage.getItem(SESSION_KEY)) || null; } catch { return null; } }
+function saveSession(sess){ localStorage.setItem(SESSION_KEY, JSON.stringify(sess||null)); }
+function clearSession(){ localStorage.removeItem(SESSION_KEY); }
+
+function AdminMailLink(subject, body){
+  const mail = (window.SUPPORT_EMAIL || 'admin@ejemplo.com').trim();
+  const link = `mailto:${mail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  window.location.href = link;
+}
+
+// ====== Auth UI ======
+function LoginScreen({ onLogin }){
+  const [usuario, setUsuario] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function submit(ev){
+    ev && ev.preventDefault();
+    setError(''); setLoading(true);
+    try {
+      const users = await fetchUsers();
+      const found = users.find(u => (u.usuario||'').toLowerCase() === (usuario||'').toLowerCase());
+      if(!found){ setError('Usuario no encontrado.'); return; }
+      if(String(found.contrasena||'') !== String(password||'')){ setError('Contraseña incorrecta.'); return; }
+      saveSession({ usuario: found.usuario, correo: found.correo || '' });
+      onLogin && onLogin();
+    } catch(err){
+      setError(err && err.message ? err.message : 'Error cargando usuarios.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function forgotPassword(){
+    const api = (window.PASSWORD_API_URL || '').trim();
+    if(api){
+      const correo = prompt('Ingresá tu correo (para enviarte un código):') || '';
+      if(!correo) return;
+      fetch(api, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'recover', usuario, correo })})
+        .then(r => r.ok ? alert('Si los datos coinciden, se envió un mail con instrucciones.') : alert('No se pudo procesar el pedido.'))
+        .catch(()=> alert('No se pudo contactar al servidor.'));
+    } else {
+      AdminMailLink('Recuperar contraseña', `Usuario: ${usuario}\nCorreo: (completá aquí)\n\nSolicito recuperar la contraseña.`);
+    }
+  }
+
+  function changePassword(){
+    const api = (window.PASSWORD_API_URL || '').trim();
+    if(api){
+      const actual = prompt('Tu contraseña actual:') || '';
+      const nueva = prompt('Nueva contraseña:') || '';
+      if(!nueva) return;
+      fetch(api, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'change', usuario, password_actual: actual, password_nueva: nueva })})
+        .then(r => r.ok ? alert('Solicitud enviada. Actualizá e iniciá sesión con la nueva contraseña.') : alert('No se pudo cambiar la contraseña.'))
+        .catch(()=> alert('No se pudo contactar al servidor.'));
+    } else {
+      AdminMailLink('Cambiar contraseña', `Usuario: ${usuario}\n\nSolicito cambiar mi contraseña.`);
+    }
+  }
+
+  return e('div', { className:'min-h-dvh flex items-center justify-center p-6' },
+    e('div', { className:'w-full max-w-sm bg-white rounded-3xl border shadow p-6', style:{ borderColor:'#d7dbe0' } },
+      e('div', { className:'text-center mb-4' },
+        e('div', { className:'text-2xl font-bold', style:{ color:'#24496e' } }, 'Tomador de lista'),
+        e('div', { className:'text-sm text-slate-600' }, 'Ingresá con tu usuario')
+      ),
+      e('form', { onSubmit:submit, className:'space-y-3' },
+        e('div', null,
+          e('label', { className:'block text-sm mb-1', style:{color:'#24496e'} }, 'Usuario'),
+          e('input', { value:usuario, onChange:e=>setUsuario(e.target.value), className:'w-full px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'}, autoFocus:true })
+        ),
+        e('div', null,
+          e('label', { className:'block text-sm mb-1', style:{color:'#24496e'} }, 'Contraseña'),
+          e('input', { type:'password', value:password, onChange:e=>setPassword(e.target.value), className:'w-full px-3 py-2 border rounded-xl', style:{borderColor:'#d7dbe0'} })
+        ),
+        error ? e('div', { className:'text-sm text-red-700 bg-red-50 rounded px-2 py-1' }, error) : null,
+        e('button', { type:'submit', disabled:loading, className:'w-full px-4 py-2 rounded-2xl text-white font-semibold', style:{ background:'#6c467e', opacity: loading? .7:1 } }, loading ? 'Ingresando...' : 'Ingresar'),
+        e('div', { className:'flex items-center justify-between text-sm pt-1' },
+          e('button', { type:'button', onClick:forgotPassword, className:'underline', style:{color:'#24496e'} }, 'Olvidé mi contraseña'),
+          e('button', { type:'button', onClick:changePassword, className:'underline', style:{color:'#24496e'} }, 'Cambiar contraseña')
+        )
+      )
+    )
+  );
+}
+
+function AppShell(){
+  const [sess, setSess] = useState(loadSession());
+  function handleLogout(){ clearSession(); setSess(null); }
+  function handleLogged(){ setSess(loadSession()); }
+  return sess
+    ? e('div', null,
+        e('div', { className:'w-full flex justify-end p-2 text-sm' },
+          e('div', { className:'flex items-center gap-2 text-slate-700' },
+            e('span', null, sess.usuario || ''),
+            e('button', { onClick:handleLogout, className:'px-2 py-1 rounded', style:{ background:'#f3efdc', color:'#24496e' } }, 'Cerrar sesión')
+          )
+        ),
+        e(App, { session: sess })
+      )
+    : e(LoginScreen, { onLogin: handleLogged });
+}
+
+
 // ===== UI =====
 
 function Header({ selectedDate, onChangeDate }) {
@@ -937,4 +1073,4 @@ function App() {
 }
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(e(App));
+root.render(e(AppShell));

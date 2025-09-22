@@ -53,6 +53,17 @@
       firebase.initializeApp(firebaseConfig);
     </script>
 
+    
+    <script>
+      // Config de autenticación (editable)
+      window.USERS_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQOIYDnMQQtRVcPNPFnfmvVWiqFFqXjslfLjwq0totnyRFWLmQBfoiHS7rFqx2fnaqQMd7-RswWKOVe/pub?output=csv";
+      // Si luego creás un Web App de Apps Script para modificar/recuperar contraseñas,
+      // poné la URL acá. Si está vacío, se usa el modo "mailto" al admin.
+      window.PASSWORD_API_URL = "";
+      // Email del admin para pedidos de recuperación (usado en modo mailto)
+      window.SUPPORT_EMAIL = "admin@ejemplo.com";
+    </script>
+
     <!-- Tu app -->
     <script src="app.js"></script>
 
